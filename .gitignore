@@ -1,0 +1,17 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+
+# runtime state (user accounts, price watches)
+data/
+
+# local Claude Code state
+.claude/
+
+# runtime logs (keep uvicorn_log_config.json)
+logs/*.log
+logs/*.log.old
+logs/*.old

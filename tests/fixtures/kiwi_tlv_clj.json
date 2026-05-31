@@ -1,0 +1,67 @@
+{
+  "currency": "USD",
+  "data": [
+    {
+      "id": "direct-wizz",
+      "price": 320,
+      "duration": { "departure": 11400, "return": 11700, "total": 23100 },
+      "route": [
+        {
+          "airline": "W6", "flight_no": 5101, "return": 0,
+          "flyFrom": "TLV", "flyTo": "CLJ",
+          "local_departure": "2026-08-04T06:00:00.000Z",
+          "local_arrival": "2026-08-04T09:10:00.000Z",
+          "utc_departure": "2026-08-04T03:00:00.000Z",
+          "utc_arrival": "2026-08-04T06:10:00.000Z"
+        },
+        {
+          "airline": "W6", "flight_no": 5102, "return": 1,
+          "flyFrom": "CLJ", "flyTo": "TLV",
+          "local_departure": "2026-08-11T10:00:00.000Z",
+          "local_arrival": "2026-08-11T13:15:00.000Z",
+          "utc_departure": "2026-08-11T07:00:00.000Z",
+          "utc_arrival": "2026-08-11T10:15:00.000Z"
+        }
+      ]
+    },
+    {
+      "id": "selftransfer-otp",
+      "price": 250,
+      "duration": { "departure": 27000, "return": 27000, "total": 54000 },
+      "route": [
+        {
+          "airline": "W6", "flight_no": 5201, "return": 0,
+          "flyFrom": "TLV", "flyTo": "OTP",
+          "local_departure": "2026-08-04T05:00:00.000Z",
+          "local_arrival": "2026-08-04T07:30:00.000Z",
+          "utc_departure": "2026-08-04T02:00:00.000Z",
+          "utc_arrival": "2026-08-04T04:30:00.000Z"
+        },
+        {
+          "airline": "W6", "flight_no": 5202, "return": 0,
+          "flyFrom": "OTP", "flyTo": "CLJ",
+          "local_departure": "2026-08-04T11:00:00.000Z",
+          "local_arrival": "2026-08-04T12:00:00.000Z",
+          "utc_departure": "2026-08-04T08:00:00.000Z",
+          "utc_arrival": "2026-08-04T09:00:00.000Z"
+        },
+        {
+          "airline": "W6", "flight_no": 5203, "return": 1,
+          "flyFrom": "CLJ", "flyTo": "OTP",
+          "local_departure": "2026-08-11T08:00:00.000Z",
+          "local_arrival": "2026-08-11T09:00:00.000Z",
+          "utc_departure": "2026-08-11T05:00:00.000Z",
+          "utc_arrival": "2026-08-11T06:00:00.000Z"
+        },
+        {
+          "airline": "W6", "flight_no": 5204, "return": 1,
+          "flyFrom": "OTP", "flyTo": "TLV",
+          "local_departure": "2026-08-11T13:00:00.000Z",
+          "local_arrival": "2026-08-11T15:30:00.000Z",
+          "utc_departure": "2026-08-11T10:00:00.000Z",
+          "utc_arrival": "2026-08-11T12:30:00.000Z"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,184 @@
+"""Data-provider abstraction: turn a search into normalized Itineraries.
+
+Each provider returns `list[Itinerary]` so the filtering/scoring/output layers
+stay source-agnostic. Choose via Settings.provider ("kiwi" or "amadeus").
+"""
+from __future__ import annotations
+
+from typing import Protocol
+
+from .amadeus_client import AmadeusClient
+from .config import Settings
+from .kayak_client import KayakClient, KayakError
+from .kayak_transform import transform_response as transform_kayak
+from .skyscanner_client import SkyscannerClient, SkyscannerError
+from .skyscanner_transform import transform_response as transform_skyscanner
+from .kiwi_client import KiwiClient
+from .kiwi_transform import transform_trips
+from .kiwi_rapidapi_client import KiwiRapidClient
+from .kiwi_rapidapi_transform import transform_itineraries as transform_kiwi_rapid
+from .mock_provider import MockProvider
+from .models import Itinerary
+from .rapidapi_client import RapidApiClient
+from .rapidapi_transform import transform_itineraries
+from .transform import transform_offers
+
+
+class Provider(Protocol):
+    async def search(
+        self,
+        *,
+        origin: str,
+        destination: str,
+        departure_date: str,
+        return_date: str | None,
+        adults: int,
+        non_stop: bool,
+        included_airlines: list[str] | None,
+        excluded_airlines: list[str] | None,
+        currency: str,
+    ) -> list[Itinerary]: ...
+
+
+class AmadeusProvider:
+    def __init__(self, settings: Settings):
+        self._client = AmadeusClient(settings)
+
+    async def search(self, **kw) -> list[Itinerary]:
+        offers = await self._client.search_offers(**kw)
+        return transform_offers(offers)
+
+
+class KiwiProvider:
+    def __init__(self, settings: Settings):
+        self._client = KiwiClient(settings)
+
+    async def search(self, **kw) -> list[Itinerary]:
+        trips, currency = await self._client.search(**kw)
+        return transform_trips(trips, currency)
+
+
+class RapidApiProvider:
+    def __init__(self, settings: Settings):
+        self._client = RapidApiClient(settings)
+        self._currency = settings.currency
+
+    async def search(self, **kw) -> list[Itinerary]:
+        items = await self._client.search(**kw)
+        itins = transform_itineraries(items)
+        for it in itins:            # API often omits currency in response
+            if not it.currency:
+                it.currency = self._currency
+        return itins
+
+
+class KiwiRapidProvider:
+    """Kiwi.com Cheap Flights via RapidAPI — real LCC + self-transfer fares."""
+
+    def __init__(self, settings: Settings):
+        self._client = KiwiRapidClient(settings)
+        self._currency = settings.currency
+
+    async def search(self, **kw) -> list[Itinerary]:
+        items = await self._client.search(**kw)
+        return transform_kiwi_rapid(items, self._currency.upper())
+
+
+class KayakProvider:
+    """Kayak flight search via RapidAPI."""
+
+    def __init__(self, settings: Settings):
+        self._client = KayakClient(settings)
+
+    async def search(self, **kw) -> list[Itinerary]:
+        data = await self._client.search(**kw)
+        return transform_kayak(data)
+
+
+class SkyscannerProvider:
+    """Skyscanner Flights Travel API via RapidAPI."""
+
+    def __init__(self, settings: Settings):
+        self._client = SkyscannerClient(settings)
+        self._currency = settings.currency
+
+    async def search(self, **kw) -> list[Itinerary]:
+        data = await self._client.search(**kw)
+        return transform_skyscanner(data, self._currency)
+
+
+class MultiProvider:
+    """Run multiple providers in parallel and merge results."""
+
+    def __init__(self, providers: list):
+        self._providers = providers
+
+    async def search(self, **kw) -> list[Itinerary]:
+        import asyncio
+        import logging
+        log = logging.getLogger(__name__)
+
+        async def _fetch_with_retry(provider, **kw) -> list[Itinerary]:
+            """One retry after 2 s for transient failures."""
+            try:
+                return await provider.search(**kw)
+            except Exception as e:
+                name = type(provider).__name__
+                log.warning("%s failed (attempt 1): %s — retrying in 2 s", name, e)
+                await asyncio.sleep(2)
+                try:
+                    return await provider.search(**kw)
+                except Exception as e2:
+                    log.error("%s failed (attempt 2): %s — skipping", name, e2)
+                    raise
+
+        tasks = [asyncio.create_task(_fetch_with_retry(p, **kw)) for p in self._providers]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        merged: list[Itinerary] = []
+        seen: set[str] = set()
+        errors: list[str] = []
+        for provider, batch in zip(self._providers, results):
+            name = type(provider).__name__
+            if isinstance(batch, Exception):
+                errors.append(f"{name}: {batch}")
+                continue
+            for it in batch:
+                key = (
+                    ",".join(sorted(it.carriers)),
+                    it.price_total,
+                    it.segments[0].departure_at if it.segments else "",
+                )
+                if key not in seen:
+                    seen.add(key)
+                    merged.append(it)
+
+        if not merged and errors:
+            raise RuntimeError(
+                f"All {len(errors)} provider(s) failed — "
+                + "; ".join(errors)
+            )
+
+        if errors:
+            log.warning("Partial provider failures (%d/%d): %s", len(errors), len(self._providers), "; ".join(errors))
+
+        return merged
+
+
+def get_provider(settings: Settings) -> Provider:
+    if settings.provider == "amadeus":
+        return AmadeusProvider(settings)
+    if settings.provider == "mock":
+        return MockProvider()
+    if settings.provider == "kiwi":
+        return KiwiProvider(settings)
+    if settings.provider == "rapidapi":
+        return RapidApiProvider(settings)
+    if settings.provider == "kayak":
+        return KayakProvider(settings)
+    if settings.provider == "skyscanner":
+        return SkyscannerProvider(settings)
+    if settings.provider == "multi":
+        active = [KiwiRapidProvider(settings), KayakProvider(settings), SkyscannerProvider(settings)]
+        return MultiProvider(active)
+    return KiwiRapidProvider(settings)

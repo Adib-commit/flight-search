@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin – Flight Optimization</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    .admin-table { width:100%; border-collapse:collapse; font-size:.85rem; margin-top:.75rem; }
+    .admin-table th { background:#1e3a5f; color:#93c5fd; padding:.5rem .75rem; text-align:left; white-space:nowrap; }
+    .admin-table td { padding:.45rem .75rem; border-bottom:1px solid #1e293b; vertical-align:top; }
+    .admin-table tr:hover td { background:#0f1f35; }
+    .role-badge { font-size:.7rem; padding:.15rem .45rem; border-radius:4px; font-weight:700; cursor:pointer; }
+    .role-admin { background:#7c3aed; color:#ede9fe; }
+    .role-user  { background:#0e4a6e; color:#bae6fd; }
+    .user-row td { background:#151f30; font-weight:600; }
+    .watch-sub td { background:#0f172a; font-size:.8rem; color:#94a3b8; padding:.3rem .75rem .3rem 2rem; }
+    .hist-toggle { cursor:pointer; color:#38bdf8; font-size:.78rem; }
+    .hist-block { display:none; background:#060e1c; border-radius:6px; padding:.5rem .75rem; margin:.25rem 0; }
+    .hist-block.open { display:block; }
+    .hist-row { display:flex; gap:.75rem; font-size:.77rem; padding:.2rem 0; border-bottom:1px solid #1e293b; }
+    .hist-row:last-child { border:none; }
+    .note-drop { color:#4ade80; font-weight:700; }
+    .note-rose { color:#f87171; }
+    .note-base { color:#fbbf24; }
+    .note-none { color:#64748b; }
+    .stat-chip { display:inline-block; background:#1e3a5f; color:#93c5fd; border-radius:4px; padding:.1rem .4rem; font-size:.72rem; margin-left:.3rem; }
+    .btn-danger { background:#991b1b; color:#fecaca; border:none; border-radius:4px; padding:.2rem .6rem; font-size:.75rem; cursor:pointer; }
+    .btn-danger:hover { background:#b91c1c; }
+    /* add-user panel */
+    .add-user-panel { background:#0f1f35; border:1px solid #1e3a5f; border-radius:8px; padding:1.1rem 1.25rem; margin-bottom:1.25rem; }
+    .add-user-panel h3 { margin:0 0 .75rem; font-size:1rem; color:#93c5fd; }
+    .add-user-form { display:flex; flex-wrap:wrap; gap:.6rem; align-items:flex-end; }
+    .add-user-form input, .add-user-form select { background:#071020; border:1px solid #1e3a5f; color:#e2e8f0; border-radius:4px; padding:.35rem .6rem; font-size:.85rem; }
+    .add-user-form button { padding:.38rem .9rem; font-size:.85rem; }
+    #add-user-msg { margin-top:.5rem; font-size:.82rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <nav class="top-nav">
+      <span>✈️ <b>Admin Panel</b></span>
+      <div style="display:flex;gap:.75rem;align-items:center">
+        <span id="nav-user" class="nav-user"></span>
+        <a href="/" class="nav-link">← App</a>
+        <button class="btn-sm" onclick="logout()">Sign out</button>
+      </div>
+    </nav>
+
+    <h2 style="margin-top:1.5rem">Users &amp; Searches</h2>
+    <p class="sub">Manage registered users, their price watches, and full price history.</p>
+
+    <div id="admin-status"></div>
+
+    <!-- ── Add User form ─────────────────────────────────────────────────── -->
+    <div class="add-user-panel" id="add-user-panel" style="display:none">
+      <h3>➕ Add User</h3>
+      <div class="add-user-form">
+        <input id="au-username" type="text"     placeholder="Username" autocomplete="off" />
+        <input id="au-email"    type="email"    placeholder="Email"    autocomplete="off" />
+        <input id="au-password" type="password" placeholder="Password" autocomplete="new-password" />
+        <select id="au-role">
+          <option value="user">user</option>
+          <option value="admin">admin</option>
+        </select>
+        <button class="btn-primary" onclick="addUser()">Create</button>
+      </div>
+      <div id="add-user-msg"></div>
+    </div>
+
+    <div id="admin-content"></div>
+  </main>
+
+  <script>
+    const token = localStorage.getItem("token");
+    const user  = JSON.parse(localStorage.getItem("user") || "null");
+
+    if (!token) { window.location.href = "/login"; }
+    if (user && user.role !== "admin") {
+      document.getElementById("admin-status").innerHTML =
+        '<p class="error">Admin access required.</p>';
+    } else {
+      document.getElementById("nav-user").textContent = user ? `👤 ${user.username}` : "";
+      document.getElementById("add-user-panel").style.display = "";
+      loadAdmin();
+    }
+
+    function logout() {
+      localStorage.removeItem("token"); localStorage.removeItem("user");
+      window.location.href = "/login";
+    }
+
+    function authHeaders() {
+      return { "Content-Type": "application/json", "Authorization": `Bearer ${token}` };
+    }
+
+    function fmtDate(iso) {
+      if (!iso) return "—";
+      return iso.slice(0, 16).replace("T", " ");
+    }
+
+    function noteClass(note) {
+      if (!note) return "note-none";
+      if (note.includes("DROP")) return "note-drop";
+      if (note.includes("rose")) return "note-rose";
+      if (note.includes("baseline") || note.includes("first")) return "note-base";
+      return "note-none";
+    }
+
+    function renderHistory(hist, watchId) {
+      if (!hist || !hist.length) return "<em>No history yet.</em>";
+      const rows = [...hist].reverse().map(h => `
+        <div class="hist-row">
+          <span style="min-width:130px;color:#64748b">${fmtDate(h.checked_at)}</span>
+          <span style="min-width:90px">${h.price != null ? "$" + h.price.toFixed(2) : "—"}</span>
+          <span class="${noteClass(h.note)}">${h.note || ""}</span>
+          <span style="color:#475569">${(h.carriers || []).join(", ")}</span>
+        </div>`).join("");
+      return `<div class="hist-block open" id="hist-${watchId}">${rows}</div>`;
+    }
+
+    function renderWatch(w) {
+      const histCount = (w.price_history || []).length;
+      return `
+        <tr class="watch-sub">
+          <td colspan="2">
+            <b>${w.origin} → ${w.destination}</b>
+            &nbsp;${w.departure}${w.ret ? " – " + w.ret : ""}
+            &nbsp;<span class="stat-chip">${w.traveler_count} pax</span>
+            ${w.max_connections != null ? `<span class="stat-chip">max ${w.max_connections} stop</span>` : ""}
+          </td>
+          <td>${w.email}</td>
+          <td>
+            ${w.best_price != null ? `<b>$${w.best_price.toFixed(2)}</b>` : "—"}
+            ${w.last_price != null && w.last_price !== w.best_price ? `<br><small style="color:#94a3b8">last $${w.last_price.toFixed(2)}</small>` : ""}
+          </td>
+          <td>${fmtDate(w.last_checked)}</td>
+          <td>
+            <span class="hist-toggle" onclick="toggleHist('${w.id}')">📋 ${histCount} checks ▾</span>
+          </td>
+        </tr>
+        <tr class="watch-sub">
+          <td colspan="6" style="padding:0 0 0 2rem">
+            ${renderHistory(w.price_history, w.id)}
+          </td>
+        </tr>`;
+    }
+
+    function toggleHist(watchId) {
+      const el = document.getElementById("hist-" + watchId);
+      if (el) el.classList.toggle("open");
+    }
+
+    async function removeUser(uid, username) {
+      if (!confirm(`Remove user "${username}" and all their watches? This cannot be undone.`)) return;
+      const resp = await fetch(`/api/admin/users/${uid}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      if (resp.ok) {
+        loadAdmin();
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        alert("Error: " + (data.detail || resp.status));
+      }
+    }
+
+    async function toggleRole(uid, currentRole) {
+      const newRole = currentRole === "admin" ? "user" : "admin";
+      if (!confirm(`Change role to "${newRole}"?`)) return;
+      const resp = await fetch(`/api/admin/users/${uid}/role`, {
+        method: "PATCH",
+        headers: authHeaders(),
+        body: JSON.stringify({ role: newRole }),
+      });
+      if (resp.ok) {
+        loadAdmin();
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        alert("Error: " + (data.detail || resp.status));
+      }
+    }
+
+    async function addUser() {
+      const msgEl = document.getElementById("add-user-msg");
+      const username = document.getElementById("au-username").value.trim();
+      const email    = document.getElementById("au-email").value.trim();
+      const password = document.getElementById("au-password").value;
+      const role     = document.getElementById("au-role").value;
+      if (!username || !email || !password) {
+        msgEl.innerHTML = '<span class="error">All fields required.</span>'; return;
+      }
+      msgEl.innerHTML = "Creating…";
+      const resp = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ username, email, password, role }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok) {
+        msgEl.innerHTML = `<span class="success">User <b>${data.username}</b> created.</span>`;
+        document.getElementById("au-username").value = "";
+        document.getElementById("au-email").value = "";
+        document.getElementById("au-password").value = "";
+        loadAdmin();
+      } else {
+        msgEl.innerHTML = `<span class="error">${data.detail || "Error " + resp.status}</span>`;
+      }
+    }
+
+    async function loadAdmin() {
+      const contentEl = document.getElementById("admin-content");
+      contentEl.innerHTML = "<p class='sub'>Loading…</p>";
+      try {
+        const resp = await fetch("/api/admin/users", { headers: authHeaders() });
+        if (resp.status === 401) { window.location.href = "/login"; return; }
+        if (!resp.ok) { contentEl.innerHTML = `<p class="error">Error ${resp.status}</p>`; return; }
+        const users = await resp.json();
+
+        if (!users.length) { contentEl.innerHTML = "<p class='sub'>No users yet.</p>"; return; }
+
+        const currentUserId = user ? user.id : null;
+
+        const rows = users.map(u => {
+          const watches = u.watches || [];
+          const totalChecks = watches.reduce((s, w) => s + (w.price_history || []).length, 0);
+          const isSelf = u.id === currentUserId;
+          const roleTitle = isSelf ? "Your account" : `Click to toggle role`;
+          return `
+            <tr class="user-row">
+              <td>
+                <span class="role-badge role-${u.role}" title="${roleTitle}"
+                  ${!isSelf ? `onclick="toggleRole('${u.id}','${u.role}')"` : ""}
+                >${u.role}</span>
+                &nbsp;<b>${u.username}</b>
+              </td>
+              <td>${u.email}</td>
+              <td>${fmtDate(u.created_at)}</td>
+              <td><span class="stat-chip">${watches.length} watches</span> <span class="stat-chip">${totalChecks} checks</span></td>
+              <td></td>
+              <td>
+                ${isSelf
+                  ? `<span style="color:#475569;font-size:.75rem">you</span>`
+                  : `<button class="btn-danger" onclick="removeUser('${u.id}','${u.username}')">Remove</button>`}
+              </td>
+            </tr>
+            ${watches.map(renderWatch).join("")}`;
+        }).join("");
+
+        contentEl.innerHTML = `
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>User</th><th>Email</th><th>Registered</th>
+                <th>Stats</th><th>Best Price</th><th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>`;
+      } catch (err) {
+        contentEl.innerHTML = `<p class="error">Network error: ${err.message}</p>`;
+      }
+    }
+  </script>
+</body>
+</html>

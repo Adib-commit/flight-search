@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Account – Flight Optimization</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <!-- qrcode.js for rendering TOTP QR codes client-side -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <style>
+    .settings-card {
+      background: #0f1f35;
+      border: 1px solid #1e3a5f;
+      border-radius: 10px;
+      padding: 1.4rem 1.6rem;
+      margin-bottom: 1.5rem;
+      max-width: 480px;
+    }
+    .settings-card h3 { margin: 0 0 1rem; color: #93c5fd; font-size: 1rem; }
+    .settings-card label { display: block; margin-bottom: .7rem; color: #cbd5e1; font-size: .9rem; }
+    .settings-card input { width: 100%; box-sizing: border-box; }
+    .mfa-badge {
+      display: inline-block; border-radius: 4px; padding: .15rem .5rem;
+      font-size: .75rem; font-weight: 700; margin-left: .5rem;
+    }
+    .mfa-on  { background: #166534; color: #86efac; }
+    .mfa-off { background: #7f1d1d; color: #fca5a5; }
+    #qr-wrap {
+      background: #fff; border-radius: 8px; padding: 1rem;
+      display: inline-block; margin: 1rem 0;
+    }
+    #qr-wrap canvas, #qr-wrap img { display: block; }
+    .secret-box {
+      background: #060e1c; border: 1px solid #1e3a5f; border-radius: 4px;
+      padding: .4rem .7rem; font-family: monospace; font-size: .85rem;
+      color: #93c5fd; letter-spacing: .1em; word-break: break-all;
+      margin-bottom: .75rem;
+    }
+    .step-label { color: #64748b; font-size: .8rem; margin-bottom: .35rem; }
+  </style>
+</head>
+<body>
+  <nav class="top-nav">
+    <span>✈️ <b>Account Settings</b></span>
+    <div style="display:flex;gap:.75rem;align-items:center">
+      <span id="nav-user" class="nav-user"></span>
+      <a href="/" class="nav-link">← App</a>
+      <button class="btn-sm" onclick="logout()">Sign out</button>
+    </div>
+  </nav>
+
+  <main style="max-width:520px; margin-top:1.5rem">
+    <h2>Account Settings</h2>
+
+    <!-- ── Change Password ─────────────────────────────────────── -->
+    <div class="settings-card">
+      <h3>🔑 Change Password</h3>
+      <label>Current password
+        <input type="password" id="cp-old" autocomplete="current-password" />
+      </label>
+      <label>New password <small style="color:#64748b">(min 8 chars)</small>
+        <input type="password" id="cp-new" autocomplete="new-password" />
+      </label>
+      <label>Confirm new password
+        <input type="password" id="cp-confirm" autocomplete="new-password" />
+      </label>
+      <button onclick="changePassword()">Update Password</button>
+      <div id="cp-msg" style="margin-top:.5rem;font-size:.85rem"></div>
+    </div>
+
+    <!-- ── MFA ─────────────────────────────────────────────────── -->
+    <div class="settings-card">
+      <h3>
+        🔐 Two-Factor Authentication
+        <span id="mfa-badge" class="mfa-badge mfa-off">OFF</span>
+      </h3>
+
+      <!-- MFA disabled state -->
+      <div id="mfa-disabled-view">
+        <p style="color:#94a3b8;font-size:.88rem;margin:0 0 1rem">
+          Add an extra layer of security. You'll need an authenticator app
+          (Google Authenticator, Authy, etc.) to sign in.
+        </p>
+        <button onclick="beginEnableMfa()">Enable Two-Factor Auth</button>
+        <div id="mfa-enable-msg" style="margin-top:.5rem;font-size:.85rem"></div>
+      </div>
+
+      <!-- MFA setup flow (hidden until Enable clicked) -->
+      <div id="mfa-setup-view" style="display:none">
+        <p class="step-label">Step 1 — Scan this QR code with your authenticator app:</p>
+        <div id="qr-wrap"><div id="qr-canvas"></div></div>
+        <p class="step-label">Or enter the secret manually:</p>
+        <div id="mfa-secret-box" class="secret-box"></div>
+        <p class="step-label">Step 2 — Enter the 6-digit code shown in the app to confirm:</p>
+        <div style="display:flex;gap:.5rem;align-items:center">
+          <input id="mfa-confirm-code" type="text" inputmode="numeric" pattern="\d{6}"
+                 maxlength="6" placeholder="000000"
+                 style="width:140px;letter-spacing:.25em;font-size:1.2rem" />
+          <button onclick="confirmMfa()">Confirm &amp; Activate</button>
+        </div>
+        <div id="mfa-confirm-msg" style="margin-top:.5rem;font-size:.85rem"></div>
+        <button onclick="cancelSetup()" style="margin-top:.5rem;background:transparent;border:1px solid #1e3a5f;color:#64748b;font-size:.8rem">
+          Cancel
+        </button>
+      </div>
+
+      <!-- MFA enabled state -->
+      <div id="mfa-enabled-view" style="display:none">
+        <p style="color:#86efac;font-size:.88rem;margin:0 0 1rem">
+          ✓ Two-factor authentication is active. Enter your authenticator code to disable it.
+        </p>
+        <div style="display:flex;gap:.5rem;align-items:center">
+          <input id="mfa-disable-code" type="text" inputmode="numeric" pattern="\d{6}"
+                 maxlength="6" placeholder="000000"
+                 style="width:140px;letter-spacing:.25em;font-size:1.2rem" />
+          <button onclick="disableMfa()" style="background:#991b1b;color:#fecaca">Disable MFA</button>
+        </div>
+        <div id="mfa-disable-msg" style="margin-top:.5rem;font-size:.85rem"></div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const token = localStorage.getItem("token");
+    const user  = JSON.parse(localStorage.getItem("user") || "null");
+    if (!token) { window.location.href = "/login"; }
+
+    document.getElementById("nav-user").textContent = user ? `👤 ${user.username}` : "";
+
+    function authHeaders() {
+      return { "Content-Type": "application/json", "Authorization": `Bearer ${token}` };
+    }
+
+    function logout() {
+      localStorage.removeItem("token"); localStorage.removeItem("user");
+      window.location.href = "/login";
+    }
+
+    // ── Load MFA status ───────────────────────────────────────────────────────
+    async function loadMfaStatus() {
+      const resp = await fetch("/api/auth/me", { headers: authHeaders() });
+      if (!resp.ok) return;
+      const me = await resp.json();
+      setMfaView(me.mfa_enabled || false);
+    }
+
+    function setMfaView(enabled) {
+      const badge = document.getElementById("mfa-badge");
+      badge.textContent = enabled ? "ON" : "OFF";
+      badge.className = "mfa-badge " + (enabled ? "mfa-on" : "mfa-off");
+      document.getElementById("mfa-disabled-view").style.display = enabled ? "none" : "";
+      document.getElementById("mfa-setup-view").style.display = "none";
+      document.getElementById("mfa-enabled-view").style.display = enabled ? "" : "none";
+    }
+
+    loadMfaStatus();
+
+    // ── Change password ───────────────────────────────────────────────────────
+    async function changePassword() {
+      const msgEl = document.getElementById("cp-msg");
+      const oldPw = document.getElementById("cp-old").value;
+      const newPw = document.getElementById("cp-new").value;
+      const conf  = document.getElementById("cp-confirm").value;
+      msgEl.textContent = "";
+      if (!oldPw || !newPw || !conf) { msgEl.innerHTML = '<span class="error">All fields required.</span>'; return; }
+      if (newPw !== conf) { msgEl.innerHTML = '<span class="error">New passwords do not match.</span>'; return; }
+      const resp = await fetch("/api/auth/change-password", {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ old_password: oldPw, new_password: newPw }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok) {
+        msgEl.innerHTML = '<span class="success">Password updated successfully.</span>';
+        document.getElementById("cp-old").value = "";
+        document.getElementById("cp-new").value = "";
+        document.getElementById("cp-confirm").value = "";
+      } else {
+        msgEl.innerHTML = `<span class="error">${data.detail || "Error " + resp.status}</span>`;
+      }
+    }
+
+    // ── Enable MFA ────────────────────────────────────────────────────────────
+    async function beginEnableMfa() {
+      const msgEl = document.getElementById("mfa-enable-msg");
+      msgEl.textContent = "Generating secret…";
+      const resp = await fetch("/api/auth/mfa/enable", { method: "POST", headers: authHeaders() });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        msgEl.innerHTML = `<span class="error">${data.detail || "Error"}</span>`; return;
+      }
+      msgEl.textContent = "";
+      // Render QR
+      document.getElementById("qr-canvas").innerHTML = "";
+      new QRCode(document.getElementById("qr-canvas"), {
+        text: data.otpauth_uri, width: 200, height: 200,
+        colorDark: "#000000", colorLight: "#ffffff",
+      });
+      document.getElementById("mfa-secret-box").textContent = data.secret;
+      document.getElementById("mfa-disabled-view").style.display = "none";
+      document.getElementById("mfa-setup-view").style.display = "";
+      document.getElementById("mfa-confirm-code").value = "";
+      document.getElementById("mfa-confirm-code").focus();
+    }
+
+    function cancelSetup() {
+      document.getElementById("mfa-setup-view").style.display = "none";
+      document.getElementById("mfa-disabled-view").style.display = "";
+      document.getElementById("mfa-confirm-msg").textContent = "";
+    }
+
+    async function confirmMfa() {
+      const msgEl = document.getElementById("mfa-confirm-msg");
+      const code = document.getElementById("mfa-confirm-code").value.trim();
+      if (!code) return;
+      msgEl.textContent = "Verifying…";
+      const resp = await fetch("/api/auth/mfa/confirm", {
+        method: "POST", headers: authHeaders(),
+        body: JSON.stringify({ totp_code: code }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok) {
+        msgEl.innerHTML = '<span class="success">MFA enabled! You\'ll need your app on next login.</span>';
+        setTimeout(() => setMfaView(true), 1200);
+      } else {
+        msgEl.innerHTML = `<span class="error">${data.detail || "Invalid code."}</span>`;
+      }
+    }
+
+    // ── Disable MFA ───────────────────────────────────────────────────────────
+    async function disableMfa() {
+      const msgEl = document.getElementById("mfa-disable-msg");
+      const code = document.getElementById("mfa-disable-code").value.trim();
+      if (!code) return;
+      msgEl.textContent = "Verifying…";
+      const resp = await fetch("/api/auth/mfa", {
+        method: "DELETE", headers: authHeaders(),
+        body: JSON.stringify({ totp_code: code }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok) {
+        msgEl.innerHTML = '<span class="success">MFA disabled.</span>';
+        setTimeout(() => setMfaView(false), 1000);
+      } else {
+        msgEl.innerHTML = `<span class="error">${data.detail || "Invalid code."}</span>`;
+      }
+    }
+  </script>
+</body>
+</html>

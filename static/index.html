@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flight Optimization</title>
+  <link rel="stylesheet" href="/static/style.css?v=13" />
+</head>
+<body>
+  <nav class="top-nav">
+    <span>✈️ <b>Flight Optimization</b></span>
+    <div style="display:flex;gap:.75rem;align-items:center">
+      <span id="nav-user" class="nav-user"></span>
+      <span id="nav-watches-badge" style="display:none"></span>
+      <a id="nav-account" href="/account" class="nav-link" style="display:none">⚙ Account</a>
+      <a id="nav-admin" href="/admin" class="nav-link" style="display:none">Admin ▸</a>
+      <button id="btn-logout" class="btn-sm" style="display:none" onclick="logout()">Sign out</button>
+      <a id="btn-login" href="/login" class="btn-sm" style="display:none">Sign in</a>
+    </div>
+  </nav>
+  <main>
+    <h1>✈️ Flight Optimization</h1>
+    <p class="sub">Find best-value flights (price + duration + stops).</p>
+
+    <form id="search-form">
+      <div class="row">
+        <label>From
+          <div class="airport-ac-wrap">
+            <input class="airport-ac-input" id="ac-origin" placeholder="City or airport (e.g. Tel Aviv, TLV)" autocomplete="off" required />
+            <input type="hidden" name="origin" id="origin-iata" />
+            <div class="airport-ac-dropdown" id="ac-origin-list"></div>
+          </div>
+        </label>
+        <label>To
+          <div class="airport-ac-wrap">
+            <input class="airport-ac-input" id="ac-destination" placeholder="City or airport (e.g. Paris, CDG)" autocomplete="off" required />
+            <input type="hidden" name="destination" id="destination-iata" />
+            <div class="airport-ac-dropdown" id="ac-destination-list"></div>
+          </div>
+        </label>
+      </div>
+
+      <div class="row">
+        <label>Departure
+          <input type="date" name="departure" required />
+        </label>
+        <label>Return (optional)
+          <input type="date" name="return" />
+        </label>
+      </div>
+
+      <div class="row">
+        <label>Travelers (adults)
+          <input type="number" name="traveler_count" value="1" min="1" max="9" />
+        </label>
+        <label>Flight type (per direction)
+          <select name="max_connections">
+            <option value="">Any connections</option>
+            <option value="0">Direct only (0 stops)</option>
+            <option value="1">Max 1 stop per direction</option>
+            <option value="2">Max 2 stops per direction</option>
+            <option value="3">Max 3 stops per direction</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="row">
+        <label>Include airlines (names, comma-sep)
+          <input name="include" placeholder="Delta, United" />
+        </label>
+        <label>Exclude airlines (names, comma-sep)
+          <input name="exclude" placeholder="Ryanair, Spirit" />
+        </label>
+      </div>
+
+      <div class="row">
+        <label>Max price per person (USD, optional)
+          <input type="number" name="max_price" placeholder="e.g. 800" min="1" step="1" />
+        </label>
+      </div>
+
+      <button type="submit">Search</button>
+    </form>
+
+    <div id="recent-searches"></div>
+
+    <!-- ── Multi-day stopover ──────────────────────────────────────── -->
+    <details id="stopover-section" style="margin-top:1.25rem">
+      <summary style="cursor:pointer;font-weight:600;color:#93c5fd;font-size:.95rem;padding:.4rem 0">
+        ✈ Multi-day stopover (open-jaw / split ticket)
+      </summary>
+      <p class="sub" style="margin:.5rem 0 1rem">
+        Book individual legs with different dates — e.g. TLV→OTP on Aug 4, then OTP→CLJ on Aug 6, return CLJ→OTP Aug 10, OTP→TLV Aug 11.
+      </p>
+
+      <div id="stopover-legs" style="display:flex;flex-direction:column;gap:.6rem"></div>
+
+      <div style="display:flex;gap:.5rem;margin-top:.6rem;flex-wrap:wrap">
+        <button type="button" class="btn-sm" onclick="addStopoverLeg()">+ Add leg</button>
+        <button type="button" class="btn-sm" onclick="removeStopoverLeg()">− Remove last</button>
+        <button type="button" class="btn-sm" onclick="fillRoundTrip()" title="Fill a typical round-trip with stopover from the main form">⟳ Fill from main form</button>
+      </div>
+
+      <div class="row" style="margin-top:.75rem">
+        <label>Travelers (adults)
+          <input type="number" id="sv-travelers" value="1" min="1" max="9" style="width:80px" />
+        </label>
+        <label>Max stops per leg
+          <select id="sv-max-conn">
+            <option value="">Any</option>
+            <option value="0">Direct only</option>
+            <option value="1">Max 1</option>
+            <option value="2">Max 2</option>
+          </select>
+        </label>
+        <label>Max price per leg (USD)
+          <input type="number" id="sv-max-price" placeholder="e.g. 300" min="1" style="width:110px" />
+        </label>
+      </div>
+
+      <button type="button" onclick="searchStopover()" style="margin-top:.75rem">🔍 Search Stopover Legs</button>
+      <div id="stopover-status" style="margin-top:.5rem"></div>
+      <div id="stopover-results" style="margin-top:.75rem"></div>
+    </details>
+
+    <div id="status"></div>
+    <div id="results"></div>
+
+    <hr class="section-divider" />
+
+    <section id="watch-section">
+      <h2>🔔 Price Watch <span class="badge-beta">batch mode</span></h2>
+      <p class="sub">Activate to re-check prices every hour and email you when a lower price is found.</p>
+
+      <form id="watch-form">
+        <div class="row">
+          <label>Notify email
+            <input type="email" id="watch-email-display" placeholder="your@email.com" required />
+          </label>
+        </div>
+        <p class="watch-note">Uses the same search parameters set above. A baseline search runs immediately; you'll be emailed whenever the price drops below the current best.</p>
+        <button type="submit" class="btn-watch">▶ Activate Price Watch</button>
+      </form>
+
+      <div id="watch-status"></div>
+
+      <button id="btn-run-now" class="btn-watch" style="background:#0e7490;margin-top:.5rem">⚡ Run checks now</button>
+      <div id="run-now-status"></div>
+
+      <div id="watches-list"></div>
+    </section>
+  </main>
+
+  <script src="/static/airports.js"></script>
+  <script src="/static/app.js?v=13"></script>
+</body>
+</html>

@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign In – Flight Optimization</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main style="max-width:420px">
+    <h1>✈️ Flight Optimization</h1>
+
+    <div id="tab-bar" style="display:flex;gap:.5rem;margin-bottom:1rem">
+      <button id="btn-tab-login" class="tab-btn tab-active" onclick="showTab('login')">Sign In</button>
+      <button id="btn-tab-register" class="tab-btn" onclick="showTab('register')">Register</button>
+    </div>
+
+    <!-- Login form -->
+    <form id="login-form">
+      <label>Username
+        <input name="username" placeholder="your username" required autocomplete="username" />
+      </label>
+      <label style="margin-top:.75rem">Password
+        <input type="password" name="password" placeholder="••••••••" required autocomplete="current-password" />
+      </label>
+      <button type="submit" style="margin-top:1rem;width:100%">Sign In</button>
+      <div style="text-align:right;margin-top:.5rem">
+        <a href="#" id="link-forgot" style="color:#38bdf8;font-size:.85rem" onclick="showTab('forgot');return false">Forgot password?</a>
+      </div>
+      <div id="login-error" class="error" style="margin-top:.5rem"></div>
+    </form>
+
+    <!-- Forgot password form -->
+    <div id="forgot-form" style="display:none">
+      <p style="color:#93c5fd;margin-bottom:.75rem">Enter your account email and we'll send you a reset link.</p>
+      <label>Email address
+        <input type="email" id="forgot-email" placeholder="you@example.com" required autocomplete="email" />
+      </label>
+      <button onclick="submitForgot()" style="margin-top:1rem;width:100%">Send reset link</button>
+      <div id="forgot-status" style="margin-top:.5rem"></div>
+      <button onclick="showTab('login')" style="margin-top:.5rem;width:100%;background:transparent;border:1px solid #1e3a5f;color:#64748b">
+        ← Back to sign in
+      </button>
+    </div>
+
+    <!-- Reset password form (shown when ?reset_token= is in URL) -->
+    <div id="reset-form" style="display:none">
+      <p style="color:#93c5fd;margin-bottom:.75rem">Choose a new password (at least 8 characters).</p>
+      <label>New password
+        <input type="password" id="reset-pw" placeholder="••••••••" required autocomplete="new-password" />
+      </label>
+      <label style="margin-top:.75rem">Confirm password
+        <input type="password" id="reset-pw2" placeholder="••••••••" required autocomplete="new-password" />
+      </label>
+      <button onclick="submitReset()" style="margin-top:1rem;width:100%">Set new password</button>
+      <div id="reset-status" style="margin-top:.5rem"></div>
+    </div>
+
+    <!-- MFA step (shown after successful password) -->
+    <div id="mfa-step" style="display:none">
+      <p style="color:#93c5fd;margin-bottom:1rem">🔐 Enter the 6-digit code from your authenticator app.</p>
+      <label>Authenticator Code
+        <input id="mfa-code" type="text" inputmode="numeric" pattern="\d{6}" maxlength="6"
+               placeholder="000000" autocomplete="one-time-code" style="letter-spacing:.25em;font-size:1.3rem" />
+      </label>
+      <button onclick="submitMfa()" style="margin-top:1rem;width:100%">Verify</button>
+      <div id="mfa-error" class="error" style="margin-top:.5rem"></div>
+      <button onclick="cancelMfa()" style="margin-top:.5rem;width:100%;background:transparent;border:1px solid #1e3a5f;color:#64748b">
+        ← Back to login
+      </button>
+    </div>
+
+    <!-- Register form -->
+    <form id="register-form" style="display:none">
+      <label>Username
+        <input name="username" placeholder="choose a username" required autocomplete="username" />
+      </label>
+      <label style="margin-top:.75rem">Email
+        <input type="email" name="email" placeholder="you@example.com" required autocomplete="email" />
+      </label>
+      <label style="margin-top:.75rem">Password
+        <input type="password" name="password" placeholder="••••••••" required autocomplete="new-password" />
+      </label>
+      <button type="submit" style="margin-top:1rem;width:100%">Create Account</button>
+      <div id="register-error" class="error" style="margin-top:.5rem"></div>
+    </form>
+  </main>
+
+  <script>
+    if (localStorage.getItem("token")) window.location.href = "/";
+
+    // If URL has ?reset_token=, jump straight to reset form
+    const _resetToken = new URLSearchParams(location.search).get("reset_token");
+    if (_resetToken) {
+      document.getElementById("tab-bar").style.display = "none";
+      document.getElementById("login-form").style.display = "none";
+      document.getElementById("reset-form").style.display = "";
+    }
+
+    let _mfaSession = null;
+
+    function showTab(tab) {
+      document.getElementById("login-form").style.display    = (tab === "login")   ? "" : "none";
+      document.getElementById("forgot-form").style.display   = (tab === "forgot")  ? "" : "none";
+      document.getElementById("reset-form").style.display    = (tab === "reset")   ? "" : "none";
+      document.getElementById("register-form").style.display = (tab === "register")? "" : "none";
+      document.getElementById("mfa-step").style.display = "none";
+      const tabBar = document.getElementById("tab-bar");
+      tabBar.style.display = (tab === "mfa" || tab === "forgot" || tab === "reset") ? "none" : "";
+      document.getElementById("btn-tab-login").classList.toggle("tab-active", tab === "login");
+      document.getElementById("btn-tab-register").classList.toggle("tab-active", tab === "register");
+    }
+
+    async function submitForgot() {
+      const email = document.getElementById("forgot-email").value.trim();
+      const st = document.getElementById("forgot-status");
+      if (!email) { st.innerHTML = '<span class="error">Enter your email.</span>'; return; }
+      st.innerHTML = '<span class="loading">Sending…</span>';
+      try {
+        const resp = await fetch("/api/auth/forgot-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        const data = await resp.json();
+        st.innerHTML = `<span class="success" style="color:#4ade80">✅ ${data.detail}</span>`;
+      } catch (e) {
+        st.innerHTML = `<span class="error">Network error: ${e.message}</span>`;
+      }
+    }
+
+    async function submitReset() {
+      const pw  = document.getElementById("reset-pw").value;
+      const pw2 = document.getElementById("reset-pw2").value;
+      const st  = document.getElementById("reset-status");
+      if (pw !== pw2) { st.innerHTML = '<span class="error">Passwords do not match.</span>'; return; }
+      if (pw.length < 8) { st.innerHTML = '<span class="error">Minimum 8 characters.</span>'; return; }
+      st.innerHTML = '<span class="loading">Saving…</span>';
+      try {
+        const resp = await fetch("/api/auth/reset-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: _resetToken, new_password: pw }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { st.innerHTML = `<span class="error">${data.detail}</span>`; return; }
+        st.innerHTML = `<span class="success" style="color:#4ade80">✅ ${data.detail}</span>`;
+        setTimeout(() => { history.replaceState({}, "", "/login"); showTab("login"); document.getElementById("tab-bar").style.display = ""; }, 2000);
+      } catch (e) {
+        st.innerHTML = `<span class="error">Network error: ${e.message}</span>`;
+      }
+    }
+
+    function cancelMfa() {
+      _mfaSession = null;
+      showTab("login");
+    }
+
+    async function submitMfa() {
+      const code = document.getElementById("mfa-code").value.trim();
+      const errEl = document.getElementById("mfa-error");
+      errEl.textContent = "";
+      if (!code) return;
+      try {
+        const resp = await fetch("/api/auth/mfa-verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mfa_session: _mfaSession, totp_code: code }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { errEl.textContent = data.detail || "Verification failed."; return; }
+        localStorage.setItem("token", data.token);
+        localStorage.setItem("user", JSON.stringify(data.user));
+        window.location.href = "/";
+      } catch (err) {
+        errEl.textContent = "Network error: " + err.message;
+      }
+    }
+
+    // Allow Enter key in MFA input
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && document.getElementById("mfa-step").style.display !== "none") {
+        submitMfa();
+      }
+    });
+
+    document.getElementById("login-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const errEl = document.getElementById("login-error");
+      errEl.textContent = "";
+      try {
+        const resp = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: f.get("username"), password: f.get("password") }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { errEl.textContent = data.detail || "Login failed."; return; }
+        if (data.mfa_required) {
+          _mfaSession = data.mfa_session;
+          document.getElementById("login-form").style.display = "none";
+          document.getElementById("tab-bar").style.display = "none";
+          document.getElementById("mfa-step").style.display = "";
+          document.getElementById("mfa-code").value = "";
+          document.getElementById("mfa-code").focus();
+          return;
+        }
+        localStorage.setItem("token", data.token);
+        localStorage.setItem("user", JSON.stringify(data.user));
+        window.location.href = "/";
+      } catch (err) {
+        errEl.textContent = "Network error: " + err.message;
+      }
+    });
+
+    document.getElementById("register-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const errEl = document.getElementById("register-error");
+      errEl.textContent = "";
+      try {
+        const resp = await fetch("/api/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: f.get("username"), email: f.get("email"), password: f.get("password") }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { errEl.textContent = data.detail || "Registration failed."; return; }
+        localStorage.setItem("token", data.token);
+        localStorage.setItem("user", JSON.stringify(data.user));
+        window.location.href = "/";
+      } catch (err) {
+        errEl.textContent = "Network error: " + err.message;
+      }
+    });
+  </script>
+</body>
+</html>

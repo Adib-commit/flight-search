@@ -1,0 +1,70 @@
+[
+  {
+    "id": "1",
+    "price": { "currency": "USD", "grandTotal": "650.00", "total": "650.00" },
+    "itineraries": [
+      {
+        "duration": "PT7H30M",
+        "segments": [
+          {
+            "carrierCode": "AF",
+            "number": "007",
+            "departure": { "iataCode": "JFK", "at": "2026-09-15T18:30:00" },
+            "arrival": { "iataCode": "CDG", "at": "2026-09-16T07:00:00" },
+            "duration": "PT7H30M"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "2",
+    "price": { "currency": "USD", "grandTotal": "420.00", "total": "420.00" },
+    "itineraries": [
+      {
+        "duration": "PT11H45M",
+        "segments": [
+          {
+            "carrierCode": "FR",
+            "number": "100",
+            "departure": { "iataCode": "JFK", "at": "2026-09-15T08:00:00" },
+            "arrival": { "iataCode": "DUB", "at": "2026-09-15T19:00:00" },
+            "duration": "PT6H00M"
+          },
+          {
+            "carrierCode": "FR",
+            "number": "200",
+            "departure": { "iataCode": "DUB", "at": "2026-09-15T21:00:00" },
+            "arrival": { "iataCode": "CDG", "at": "2026-09-15T23:45:00" },
+            "duration": "PT1H45M"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "3",
+    "price": { "currency": "USD", "grandTotal": "510.00", "total": "510.00" },
+    "itineraries": [
+      {
+        "duration": "PT9H10M",
+        "segments": [
+          {
+            "carrierCode": "DL",
+            "number": "405",
+            "departure": { "iataCode": "JFK", "at": "2026-09-15T10:00:00" },
+            "arrival": { "iataCode": "AMS", "at": "2026-09-15T17:00:00" },
+            "duration": "PT7H00M"
+          },
+          {
+            "carrierCode": "DL",
+            "number": "406",
+            "departure": { "iataCode": "AMS", "at": "2026-09-15T18:30:00" },
+            "arrival": { "iataCode": "CDG", "at": "2026-09-15T19:10:00" },
+            "duration": "PT1H10M"
+          }
+        ]
+      }
+    ]
+  }
+]
