@@ -12,6 +12,7 @@ def to_out(it: Itinerary) -> ItineraryOut:
     return ItineraryOut(
         id=it.id,
         price_total=it.price_total,
+        price_per_person=it.price_per_person or it.price_total,
         currency=it.currency,
         carriers=it.carriers,
         carrier_names=[code_to_name(c) for c in it.carriers],

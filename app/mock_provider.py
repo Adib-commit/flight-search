@@ -19,7 +19,7 @@ def _seg(carrier, num, o, d, dep, arr, dur) -> Segment:
 
 def _tlv_clj(dep_date: str, ret_date: str | None, adults: int) -> list[Itinerary]:
     rt = ret_date is not None
-    f = float(adults)
+    f = 1.0  # per-person; run_search applies traveler_count scaling
     items: list[Itinerary] = []
 
     # Direct Wizz both ways
@@ -68,7 +68,7 @@ def _tlv_clj(dep_date: str, ret_date: str | None, adults: int) -> list[Itinerary
 
 def _generic(origin: str, dest: str, dep_date: str, ret_date: str | None, adults: int) -> list[Itinerary]:
     rt = ret_date is not None
-    f = float(adults)
+    f = 1.0  # per-person; run_search applies traveler_count scaling
     base = [
         ("LH", 0, 240, 0, 480),     # direct
         ("AF", 1, 300, 90, 560),    # 1 stop

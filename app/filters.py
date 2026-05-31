@@ -45,7 +45,7 @@ def apply_filters(
             stops_to_check = it.stops_count
         if max_connections is not None and stops_to_check > max_connections:
             continue
-        if max_price is not None and it.price_total > max_price * max(traveler_count, 1):
+        if max_price is not None and it.price_total > max_price:
             continue
 
         seg_carriers = {s.carrier_code for s in it.segments}

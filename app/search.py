@@ -26,6 +26,15 @@ class NoResultsError(RuntimeError):
     pass
 
 
+def _apply_pax_pricing(itineraries: list[Itinerary], pax: int) -> None:
+    """ALL prices are per-person. traveler_count is NOT used to scale price — it
+    only gates availability: providers are queried with adults=N, so the returned
+    fares are guaranteed bookable for N travelers. Here we just mirror the
+    per-person fare into price_per_person; price_total stays per-person."""
+    for it in itineraries:
+        it.price_per_person = round(it.price_total, 2)
+
+
 async def run_search(req: SearchRequest, settings: Settings) -> SearchResponse:
     """End-to-end: validate -> fetch (provider) -> filter -> score -> present."""
     t0 = datetime.now()
@@ -59,6 +68,8 @@ async def run_search(req: SearchRequest, settings: Settings) -> SearchResponse:
     logger.info("SEARCH provider returned %d itineraries in %.2fs",
                 len(itineraries), (datetime.now() - t0).total_seconds())
 
+    _apply_pax_pricing(itineraries, req.traveler_count)
+
     if not itineraries:
         logger.warning("SEARCH no results %s→%s dep=%s",
                        req.origin.strip().upper(), req.destination.strip().upper(), dep_s)
@@ -84,7 +95,7 @@ async def run_search(req: SearchRequest, settings: Settings) -> SearchResponse:
         parts: list[str] = [f"All {n} result{'s' if n != 1 else ''} were removed by your filters."]
 
         cheapest = min(itineraries, key=lambda it: it.price_total)
-        cheapest_pp = cheapest.price_total / (req.traveler_count or 1)
+        cheapest_pp = cheapest.price_total  # all prices are per-person
         min_stops = min(it.max_stops_per_dir for it in itineraries)
         out_segs = [s for s in cheapest.segments if s.direction in ("outbound", "")]
         cheapest_route = (
@@ -93,15 +104,10 @@ async def run_search(req: SearchRequest, settings: Settings) -> SearchResponse:
         ) or "unknown route"
 
         if req.max_price is not None:
-            per_person_budget = req.max_price
-            pax = req.traveler_count or 1
-            total_budget = per_person_budget * pax
             parts.append(
-                f"Max price: you set ${per_person_budget:.0f}/person "
-                f"(${total_budget:.0f} total for {pax} traveler(s)) but the "
+                f"Max price: you set ${req.max_price:.0f}/person but the "
                 f"cheapest option costs ${cheapest_pp:.0f}/person "
-                f"(${cheapest.price_total:.0f} total, "
-                f"{'/'.join(cheapest.carriers)} on {cheapest_route})."
+                f"({'/'.join(cheapest.carriers)} on {cheapest_route})."
             )
 
         if req.max_connections is not None and min_stops > req.max_connections:
@@ -225,6 +231,7 @@ async def _auto_split_suggestion(
             )
             if not itins:
                 return StopoverLegResult(label=label, date=d.isoformat(), options=[], cheapest_price=0.0, currency=settings.currency, error="No flights found")
+            _apply_pax_pricing(itins, req.traveler_count)
             scored = score_itineraries(sorted(itins, key=lambda x: x.price_total)[:15], settings)
             top = scored[:3]
             return StopoverLegResult(
@@ -318,6 +325,7 @@ async def run_stopover_search(req: StopoverRequest, settings: Settings) -> Stopo
                 excluded_airlines=exclude_codes or None,
                 currency=settings.currency,
             )
+            _apply_pax_pricing(itins, req.traveler_count)
             filtered = apply_filters(
                 itins,
                 max_connections=req.max_connections,

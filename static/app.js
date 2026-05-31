@@ -292,7 +292,6 @@ function routePath(o) {
 // FULL list of all routes, selected one highlighted.
 function allRoutes(data) {
   const opts = (data.options || []).slice(0, 3);
-  const pax = data._searchPayload?.traveler_count || 1;
   if (!opts.length) return "";
   const ids = {
     best: data.best_value[0] && data.best_value[0].id,
@@ -315,7 +314,7 @@ function allRoutes(data) {
         <div class="route-card ${selected ? "selected" : ""}">
           <div class="route-head">
             <span class="rank">#${i + 1}</span>
-            <span class="price">${(o.price_total / pax).toFixed(2)} ${o.currency}/pp${pax > 1 ? ` <span style="font-size:.8em;color:#94a3b8">(total ${o.price_total.toFixed(2)})</span>` : ""}</span>
+            <span class="price">${(o.price_per_person ?? o.price_total).toFixed(2)} ${o.currency}/pp${o.price_total > (o.price_per_person ?? o.price_total) ? ` <span style="font-size:.8em;color:#94a3b8">(total ${o.price_total.toFixed(2)})</span>` : ""}</span>
             <span class="meta">${o.carrier_names.join(", ")}</span>
             <span class="meta">${o.stops_count} stop${o.stops_count === 1 ? "" : "s"}</span>
             <span class="meta">✈ ${fmtH(o.total_duration_min)}</span>
@@ -337,7 +336,6 @@ function allRoutes(data) {
 
 function costChart(data) {
   const opts = (data.options || []).slice(0, 3);
-  const pax = data._searchPayload?.traveler_count || 1;
   if (!opts.length) return "";
   const ids = {
     best: data.best_value[0] && data.best_value[0].id,
@@ -366,7 +364,7 @@ function costChart(data) {
           <div class="bar-label" title="${label}">#${i + 1} ${label} ${tagHtml}</div>
           <div class="bar-track">
             <div class="${cls}" style="width:${Math.max(pct, 6)}%">
-              <span class="bar-price">${(o.price_total / pax).toFixed(2)} ${o.currency}/pp</span>
+              <span class="bar-price">${(o.price_per_person ?? o.price_total).toFixed(2)} ${o.currency}/pp</span>
             </div>
           </div>
         </div>`;
@@ -426,7 +424,7 @@ function renderSplitSuggestion(split, cheapestRegular) {
       return `
         <div class="result-card" style="margin-bottom:.75rem;border-left:3px solid ${oi === 0 ? "#4ade80" : "#1e3a5f"}">
           <div class="result-header">
-            <span class="price">$${o.price_total.toFixed(2)} <span class="currency">${o.currency}</span></span>
+            <span class="price">$${(o.price_per_person ?? o.price_total).toFixed(2)}/pp${o.price_total > (o.price_per_person ?? o.price_total) ? ` <span style="font-size:.8em;color:#94a3b8">(total $${o.price_total.toFixed(2)})</span>` : ""} <span class="currency">${o.currency}</span></span>
             <span class="stops">${o.stops_count === 0 ? "Direct" : o.stops_count + " stop" + (o.stops_count > 1 ? "s" : "")}</span>
             <span class="dur">${fmtH(o.total_duration_min)}</span>
             <span style="color:#94a3b8;font-size:.82rem">${carriers}</span>
@@ -931,7 +929,7 @@ function renderStopoverResults(data) {
       return `
         <div class="result-card" style="margin-bottom:.75rem;border-left:3px solid ${oi === 0 ? "#4ade80" : "#1e3a5f"}">
           <div class="result-header">
-            <span class="price">$${o.price_total.toFixed(2)} <span class="currency">${o.currency}</span></span>
+            <span class="price">$${(o.price_per_person ?? o.price_total).toFixed(2)}/pp${o.price_total > (o.price_per_person ?? o.price_total) ? ` <span style="font-size:.8em;color:#94a3b8">(total $${o.price_total.toFixed(2)})</span>` : ""} <span class="currency">${o.currency}</span></span>
             <span class="stops">${o.stops_count === 0 ? "Direct" : o.stops_count + " stop" + (o.stops_count > 1 ? "s" : "")}</span>
             <span class="dur">${fmtH(o.total_duration_min)}</span>
             <span style="color:#94a3b8;font-size:.82rem">${carriers}</span>

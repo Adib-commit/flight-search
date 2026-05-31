@@ -64,7 +64,7 @@ class Segment:
 @dataclass
 class Itinerary:
     id: str
-    price_total: float
+    price_total: float           # per-person fare (all calculations are per 1 person)
     currency: str
     carriers: list[str]          # unique IATA carrier codes across segments
     stops_count: int             # total stops across the whole trip (all directions)
@@ -75,6 +75,7 @@ class Itinerary:
     segments: list[Segment] = field(default_factory=list)
     score: float | None = None           # filled by scoring engine
     score_breakdown: "ScoreBreakdown | None" = None  # per-dimension breakdown
+    price_per_person: float = 0.0        # per-traveler fare; 0 until pax pricing applied
 
 
 # ---- response ----
@@ -96,7 +97,8 @@ class SegmentOut(BaseModel):
 
 class ItineraryOut(BaseModel):
     id: str
-    price_total: float
+    price_total: float           # per-person fare
+    price_per_person: float = 0.0
     currency: str
     carriers: list[str]
     carrier_names: list[str]
