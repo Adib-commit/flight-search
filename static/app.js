@@ -446,8 +446,51 @@ function renderSplitSuggestion(split, cheapestRegular) {
   </div>`;
 }
 
+function topPicks(data) {
+  // Always surface the three headline itineraries explicitly, even when the
+  // cheapest/fastest are not in the best-value top-3 (e.g. a cheap but slow
+  // self-transfer). Answers "where do I see the $X cheapest?".
+  const picks = [
+    { o: data.best_value && data.best_value[0], label: "⭐ Best Value", color: "#4ade80" },
+    { o: data.cheapest, label: "💲 Cheapest", color: "#38bdf8" },
+    { o: data.fastest, label: "⚡ Fastest", color: "#f59e0b" },
+  ].filter(p => p.o);
+  if (!picks.length) return "";
+  // De-dupe by id so we don't show the same flight 3x, but keep the label list.
+  const byId = {};
+  for (const p of picks) {
+    const e = (byId[p.o.id] ||= { o: p.o, labels: [], color: p.color });
+    e.labels.push(p.label);
+  }
+  const cards = Object.values(byId).map(({ o, labels, color }) => {
+    const pp = (o.price_per_person ?? o.price_total).toFixed(2);
+    const totalNote = o.price_total > (o.price_per_person ?? o.price_total)
+      ? ` <span style="font-size:.8em;color:#94a3b8">(total $${o.price_total.toFixed(2)})</span>` : "";
+    const url = o.booking_url || fallbackBookUrl(o);
+    const bookBtn = url ? `<a class="book-btn" href="${url}" target="_blank" rel="noopener">Book →</a>` : "";
+    return `
+      <div class="route-card" style="border-left:4px solid ${color}">
+        <div class="route-head">
+          <span>${labels.map(l => `<span class="tag tag-best" style="margin-right:.25rem">${l}</span>`).join("")}</span>
+          <span class="price">${pp} ${o.currency}/pp${totalNote}</span>
+          <span class="meta">${o.carrier_names.join(", ")}</span>
+          <span class="meta">${o.stops_count} stop${o.stops_count === 1 ? "" : "s"}</span>
+          <span class="meta">✈ ${fmtH(o.total_duration_min)}</span>
+          <span class="meta">⏳ layover ${fmtH(o.layover_min)}</span>
+          ${bookBtn}
+        </div>
+        ${routePath(o)}
+      </div>`;
+  }).join("");
+  return `<div class="card">
+    <h3>🏷️ Top picks — Best Value · Cheapest · Fastest</h3>
+    <div class="route-list">${cards}</div>
+  </div>`;
+}
+
 function render(data) {
-  let html = costChart(data);
+  let html = topPicks(data);
+  html += costChart(data);
   html += allRoutes(data);
   if (data.split_via) {
     html += `<div id="split-suggestion-area" class="card" style="border:2px solid #0e7490">
@@ -606,11 +649,16 @@ async function _fetchSplitSuggestion(searchPayload, via, cheapestRegular, regula
       body: JSON.stringify({ search: searchPayload, via }),
     });
     const split = resp.ok ? await resp.json() : null;
-    if (split && split.legs && split.legs.length) {
+    const cheaper = !cheapestRegular || cheapestRegular <= 0 || (split && split.total_price < cheapestRegular);
+    if (split && split.legs && split.legs.length && cheaper) {
       const newHtml = renderSplitSuggestion(split, cheapestRegular);
       const area = document.getElementById("split-suggestion-area");
       if (area) area.outerHTML = newHtml;
       _injectSplitIntoChart(split, cheapestRegular, regularOptions);
+    } else if (split && split.legs && split.legs.length) {
+      // Found a split but it is NOT cheaper than the regular round-trip — do not
+      // promote it; the split feature exists to surface CHEAPER multi-day combos.
+      area.outerHTML = `<div class="card split-card"><p class="split-desc">No cheaper split-ticket via <b>${via}</b>: best multi-day combo is $${split.total_price.toFixed(2)} vs regular cheapest $${cheapestRegular.toFixed(2)}.</p></div>`;
     } else {
       area.outerHTML = `<div class="card split-card"><p class="split-desc">No cheaper split-ticket found via <b>${via}</b> for these dates.</p></div>`;
     }
