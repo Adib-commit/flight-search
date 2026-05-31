@@ -59,7 +59,10 @@ async def run_search(req: SearchRequest, settings: Settings) -> SearchResponse:
         destination=req.destination.strip().upper(),
         departure_date=dep_s,
         return_date=ret_s,
-        adults=req.traveler_count,
+        adults=1,                # ALL pricing is per-person; providers disagree on
+                                 # group-price semantics (Kiwi returns 0 for pax>1,
+                                 # Skyscanner returns a pax-total) so we always query
+                                 # 1 adult. traveler_count is used only downstream.
         non_stop=False,          # always fetch all; connection count filtered locally
         included_airlines=include_codes or None,
         excluded_airlines=exclude_codes or None,
@@ -223,7 +226,7 @@ async def _auto_split_suggestion(
                 fast_provider.search(
                     origin=orig, destination=dest,
                     departure_date=d.isoformat(), return_date=None,
-                    adults=req.traveler_count, non_stop=False,
+                    adults=1, non_stop=False,   # per-person pricing (see run_search)
                     included_airlines=None, excluded_airlines=None,
                     currency=settings.currency,
                 ),
@@ -319,7 +322,7 @@ async def run_stopover_search(req: StopoverRequest, settings: Settings) -> Stopo
                 destination=leg.destination.strip().upper(),
                 departure_date=leg.date,
                 return_date=None,       # always one-way per leg
-                adults=req.traveler_count,
+                adults=1,               # per-person pricing (see run_search)
                 non_stop=False,
                 included_airlines=include_codes or None,
                 excluded_airlines=exclude_codes or None,

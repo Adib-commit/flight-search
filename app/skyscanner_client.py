@@ -137,12 +137,31 @@ class SkyscannerClient:
             params["returnDate"] = return_date
 
         url = f"{SKYSCANNER_BASE}/flights/searchFlights"
+        # Skyscanner search is incremental and the backend aggregates over a few
+        # seconds. A cold call returns status=COMPLETE but with only a partial
+        # set (e.g. 10 itineraries); polling the same query a few times lets the
+        # server-side cache fill to the full set (hundreds, incl. self-transfer
+        # combos). We therefore poll up to 6 times, KEEP the response with the
+        # most itineraries, and break early once the set is clearly full.
+        FULL_ENOUGH = 50
+        MAX_ATTEMPTS = 6
+        best: dict = {}
+        best_n = -1
         async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.get(url, headers=self._headers(), params=params)
-
-        if resp.status_code == 429:
-            raise SkyscannerRateLimitError("Skyscanner rate-limited on flight search")
-        if resp.status_code != 200:
-            raise SkyscannerError(f"Skyscanner search failed: {resp.status_code} {resp.text[:300]}")
-
-        return resp.json()
+            for attempt in range(MAX_ATTEMPTS):
+                resp = await client.get(url, headers=self._headers(), params=params)
+                if resp.status_code == 429:
+                    raise SkyscannerRateLimitError("Skyscanner rate-limited on flight search")
+                if resp.status_code != 200:
+                    raise SkyscannerError(
+                        f"Skyscanner search failed: {resp.status_code} {resp.text[:300]}"
+                    )
+                data = resp.json()
+                n = len(data.get("itineraries") or [])
+                if n > best_n:
+                    best, best_n = data, n
+                if best_n >= FULL_ENOUGH:
+                    break
+                if attempt < MAX_ATTEMPTS - 1:
+                    await asyncio.sleep(1.5)
+        return best
