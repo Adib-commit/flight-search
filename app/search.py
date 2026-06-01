@@ -14,7 +14,7 @@ from .models import (
     StopoverLegRequest, StopoverLegResult, StopoverRequest, StopoverResponse,
 )
 from .output import build_response, to_out
-from .providers import get_provider, KiwiRapidProvider, MultiProvider, WizzProvider
+from .providers import get_provider, KayakProvider, KiwiRapidProvider, MultiProvider, WizzProvider
 from .scoring import score_itineraries
 from .validation import validate_request
 
@@ -211,8 +211,11 @@ async def _auto_split_suggestion(
     tickets. We:
       1. Find the most common via-airport from the search results (e.g. OTP)
       2. Build 4 independent one-way legs with different dates
-      3. Search each leg independently using the fast KiwiRapid provider only
+      3. Search each leg as a DIRECT flight (the via hub is the one allowed
+         stop per direction — broken legs must not add their own stops)
       4. Return the cheapest combination
+
+    Only offered when the customer allows ≥1 connection per direction.
 
     Date strategy (round trip):
       - Leg 1: origin → via   on departure_date        (e.g. TLV→OTP Aug 4)
@@ -220,6 +223,13 @@ async def _auto_split_suggestion(
       - Leg 3: dest → via     on return_date-M          (try M=1,2)
       - Leg 4: via → origin   on return_date            (e.g. OTP→TLV Aug 11)
     """
+    # A split via one hub adds exactly one stop per direction (you change
+    # planes at the via airport). So it's only valid when the customer allows
+    # ≥1 connection. If they asked for direct-only (max_connections == 0), a
+    # split through OTP would violate that — don't offer it.
+    if req.max_connections is not None and req.max_connections < 1:
+        return None
+
     via = via_override or _find_via_airport(itineraries)
     if not via:
         return None
@@ -229,12 +239,13 @@ async def _auto_split_suggestion(
     dep: date = req.flight_dates.departure
     ret: date | None = req.flight_dates.ret
 
-    # Use KiwiRapid (+ Wizz direct) for speed — avoids 3x API explosion while
-    # still surfacing cheap Wizz LCC fares on each leg (e.g. TLV↔OTP).
+    # Use KiwiRapid + Kayak (+ Wizz direct) for the legs — skips the slow
+    # Skyscanner provider but keeps regional direct coverage (e.g. Kayak has
+    # direct OTP→CLJ that Kiwi lacks) plus cheap Wizz LCC fares (TLV↔OTP).
+    leg_providers = [KiwiRapidProvider(settings), KayakProvider(settings)]
     if settings.wizz_enabled:
-        fast_provider = MultiProvider([KiwiRapidProvider(settings), WizzProvider(settings)])
-    else:
-        fast_provider = KiwiRapidProvider(settings)
+        leg_providers.append(WizzProvider(settings))
+    fast_provider = MultiProvider(leg_providers)
 
     async def _one_leg(orig: str, dest: str, d: date) -> StopoverLegResult:
         label = f"{orig} → {dest}"
@@ -243,14 +254,20 @@ async def _auto_split_suggestion(
                 fast_provider.search(
                     origin=orig, destination=dest,
                     departure_date=d.isoformat(), return_date=None,
-                    adults=1, non_stop=False,   # per-person pricing (see run_search)
+                    adults=1, non_stop=True,    # split legs must be DIRECT — the
+                                                # via hub (e.g. OTP) is itself the
+                                                # one allowed stop per direction,
+                                                # so a broken leg must add none.
                     included_airlines=None, excluded_airlines=None,
                     currency=settings.currency,
                 ),
                 timeout=25,
             )
+            # Enforce direct: providers don't all honor non_stop, so drop any leg
+            # itinerary that has its own stops. A split = 4 direct hops via OTP.
+            itins = [it for it in itins if it.stops_count == 0]
             if not itins:
-                return StopoverLegResult(label=label, date=d.isoformat(), options=[], cheapest_price=0.0, currency=settings.currency, error="No flights found")
+                return StopoverLegResult(label=label, date=d.isoformat(), options=[], cheapest_price=0.0, currency=settings.currency, error="No direct flight on this leg")
             _apply_pax_pricing(itins, req.traveler_count)
             scored = score_itineraries(sorted(itins, key=lambda x: x.price_total)[:15], settings)
             top = scored[:3]
@@ -271,25 +288,38 @@ async def _auto_split_suggestion(
         offsets = [(fwd, back) for fwd in range(1, 7) for back in range(1, 6)
                    if dep + timedelta(days=fwd) < ret - timedelta(days=back)]
 
-        # Run all leg-1 and leg-4 once (they're always the same date)
-        leg1_task = asyncio.create_task(_one_leg(origin, via, dep))
-        leg4_task = asyncio.create_task(_one_leg(via, origin, ret))
-
-        # For legs 2 & 3, deduplicate date pairs and search in parallel
         mid_combos: list[tuple[date, date]] = list({
             (dep + timedelta(days=fwd), ret - timedelta(days=back))
             for fwd, back in offsets
         })
-        leg2_tasks = [asyncio.create_task(_one_leg(via, destination, mid_dep)) for mid_dep, _ in mid_combos]
-        leg3_tasks = [asyncio.create_task(_one_leg(destination, via, mid_ret)) for _, mid_ret in mid_combos]
+
+        # Search every UNIQUE leg/date exactly once. Each mid date appears in
+        # many combos, so searching per-combo would fire ~5x redundant provider
+        # calls and throttle the upstreams (Wizz 429/503, empty results). Keyed
+        # by date, legs 2 & 3 collapse to a handful of real searches.
+        uniq_mid_dep = sorted({md for md, _ in mid_combos})
+        uniq_mid_ret = sorted({mr for _, mr in mid_combos})
+
+        leg1_task = asyncio.create_task(_one_leg(origin, via, dep))
+        leg4_task = asyncio.create_task(_one_leg(via, origin, ret))
+        leg2_tasks = {d: asyncio.create_task(_one_leg(via, destination, d)) for d in uniq_mid_dep}
+        leg3_tasks = {d: asyncio.create_task(_one_leg(destination, via, d)) for d in uniq_mid_ret}
 
         leg1, leg4 = await asyncio.gather(leg1_task, leg4_task)
-        leg2_results = await asyncio.gather(*leg2_tasks)
-        leg3_results = await asyncio.gather(*leg3_tasks)
+        await asyncio.gather(*leg2_tasks.values(), *leg3_tasks.values())
+        leg2_map = {d: t.result() for d, t in leg2_tasks.items()}
+        leg3_map = {d: t.result() for d, t in leg3_tasks.items()}
 
-        # Pick the combination with cheapest total
+        # A split is only real if EVERY leg has a direct flight. The fixed
+        # legs 1 & 4 must exist; otherwise there is no valid split to suggest.
+        if not leg1.options or not leg4.options:
+            return None
+
+        # Pick the combination with cheapest total. Combos where the middle
+        # legs have no direct flight are skipped (never fabricate a $0 leg).
         best: StopoverResponse | None = None
-        for (mid_dep, mid_ret), leg2, leg3 in zip(mid_combos, leg2_results, leg3_results):
+        for mid_dep, mid_ret in mid_combos:
+            leg2, leg3 = leg2_map[mid_dep], leg3_map[mid_ret]
             if leg2.error or leg3.error or not leg2.options or not leg3.options:
                 continue
             total = (leg1.cheapest_price + leg2.cheapest_price +
@@ -300,13 +330,6 @@ async def _auto_split_suggestion(
                     total_price=round(total, 2),
                     currency=settings.currency,
                 )
-        if best is None and not (leg1.error or leg4.error):
-            # Return even partial results if legs 1 & 4 worked
-            if leg2_results and leg3_results:
-                leg2 = min(leg2_results, key=lambda r: r.cheapest_price if not r.error else 9999)
-                leg3 = min(leg3_results, key=lambda r: r.cheapest_price if not r.error else 9999)
-                total = leg1.cheapest_price + leg2.cheapest_price + leg3.cheapest_price + leg4.cheapest_price
-                best = StopoverResponse(legs=[leg1, leg2, leg3, leg4], total_price=round(total, 2), currency=settings.currency)
         return best
 
     else:

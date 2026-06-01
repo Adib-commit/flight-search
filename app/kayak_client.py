@@ -6,6 +6,8 @@ references. Duration fields are in minutes.
 """
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 from tenacity import (
     retry,
@@ -17,6 +19,12 @@ from tenacity import (
 from .config import Settings
 
 KAYAK_BASE = "https://kayak-api.p.rapidapi.com"
+
+# The kayak-api backend keys an in-flight search by API key, so CONCURRENT
+# requests collide and every caller gets the same (wrong) route's results.
+# Serialize all Kayak calls process-wide. The regular search hits Kayak once;
+# only the multi-leg split/stopover fan out, and they must run sequentially.
+_KAYAK_LOCK = asyncio.Lock()
 
 
 class KayakError(RuntimeError):
@@ -94,12 +102,13 @@ class KayakClient:
         if filter_parts:
             payload["filterParams"] = {"fs": ";".join(filter_parts)}
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{KAYAK_BASE}/search-flights",
-                json=payload,
-                headers=self._headers(),
-            )
+        async with _KAYAK_LOCK:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    f"{KAYAK_BASE}/search-flights",
+                    json=payload,
+                    headers=self._headers(),
+                )
 
         if resp.status_code == 429:
             raise KayakRateLimitError("Kayak RapidAPI rate limit (429).")

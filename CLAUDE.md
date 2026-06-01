@@ -18,12 +18,16 @@ should be in hours not minuets
 11. I want you to add  multi-day stopover section, an option that the connection can be in a different day at all. an example filght from TLV to bucharest at 04/08/2026, then  flight from bucharest to CLJ on the 06/08/2026 and back flight at 10/08/2026 from CLJ to bucharest and then at 11/08/2026 from bucharest to TLV
 12. I want you to add multi scrappers kayak in addition to kiwi added skyscanner scrapper as well 
     The user wants the regular search to automatically detect possible multi-day split connections and show them in the results
+*** Important  ***
 example:
 I searched and i didn't get multi day multi-day split connections for my results like wizz at 04/08/2026 from tlv to bucharest and from bucharest to cluj at 06/08/2026 and getting back from cluj to bucharest at 10/08/2026 and from bucharest to TLV at 11/04/2026 with wizz. CHECK THIS !!!
 
-13. I want you to be able to activate multiple watchers and for stopover legs as well
-
+There is an issue with the Agent-built Multi-day Split-ticket via OTP. When the customer request up to 1 stop per direction means the the 4 LEGS ARE the stops 
+  ! dont create in the boken legs more stops. change this - OR a flight with original connection or 4 different legs with direct flights
+  
 *** Important  ***
+
+13. I want you to be able to activate multiple watchers and for stopover legs as well
 
 You are an expert backend engineer and algorithm designer. Your task is to update the flight search engine in our application to implement a dynamic "Best Value" scoring and routing algorithm. 
 
