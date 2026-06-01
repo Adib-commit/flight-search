@@ -14,7 +14,7 @@ from .models import (
     StopoverLegRequest, StopoverLegResult, StopoverRequest, StopoverResponse,
 )
 from .output import build_response, to_out
-from .providers import get_provider, KiwiRapidProvider
+from .providers import get_provider, KiwiRapidProvider, MultiProvider, WizzProvider
 from .scoring import score_itineraries
 from .validation import validate_request
 
@@ -229,8 +229,12 @@ async def _auto_split_suggestion(
     dep: date = req.flight_dates.departure
     ret: date | None = req.flight_dates.ret
 
-    # Use KiwiRapid only for speed — avoids 3x API explosion
-    fast_provider = KiwiRapidProvider(settings)
+    # Use KiwiRapid (+ Wizz direct) for speed — avoids 3x API explosion while
+    # still surfacing cheap Wizz LCC fares on each leg (e.g. TLV↔OTP).
+    if settings.wizz_enabled:
+        fast_provider = MultiProvider([KiwiRapidProvider(settings), WizzProvider(settings)])
+    else:
+        fast_provider = KiwiRapidProvider(settings)
 
     async def _one_leg(orig: str, dest: str, d: date) -> StopoverLegResult:
         label = f"{orig} → {dest}"

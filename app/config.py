@@ -40,6 +40,12 @@ class Settings(BaseSettings):
 
     currency: str = "USD"
 
+    # Wizz Air direct fetcher (be.wizzair.com public timetable API). LCC fares
+    # that the RapidAPI aggregators under-represent. Direct flights only.
+    wizz_enabled: bool = True
+    wizz_version: str = "28.10.1"   # fallback API version; auto-discovered at runtime
+    wizz_eur_usd: float = 1.08      # approx FX; timetable prices come back in EUR
+
     # Logging: level for root logger; all logs go to console + logs/app.log
     log_level: str = "INFO"
 

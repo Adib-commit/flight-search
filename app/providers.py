@@ -22,6 +22,8 @@ from .models import Itinerary
 from .rapidapi_client import RapidApiClient
 from .rapidapi_transform import transform_itineraries
 from .transform import transform_offers
+from .wizz_client import WizzClient
+from .wizz_transform import transform_timetable as transform_wizz
 
 
 class Provider(Protocol):
@@ -107,6 +109,33 @@ class SkyscannerProvider:
         return transform_skyscanner(data, self._currency)
 
 
+class WizzProvider:
+    """Wizz Air direct fares via the public be.wizzair.com timetable API.
+
+    Returns itineraries only for routes Wizz actually flies direct; everything
+    else comes back empty (no Wizz on that sector).
+    """
+
+    def __init__(self, settings: Settings):
+        self._client = WizzClient(settings)
+        self._settings = settings
+
+    async def search(self, **kw) -> list[Itinerary]:
+        data = await self._client.search(
+            origin=kw["origin"], destination=kw["destination"],
+            departure_date=kw["departure_date"], return_date=kw.get("return_date"),
+        )
+        return transform_wizz(
+            data,
+            origin=kw["origin"].upper(),
+            destination=kw["destination"].upper(),
+            dep_date=kw["departure_date"],
+            ret_date=kw.get("return_date"),
+            target_currency=self._settings.currency,
+            eur_usd=self._settings.wizz_eur_usd,
+        )
+
+
 class MultiProvider:
     """Run multiple providers in parallel and merge results."""
 
@@ -188,8 +217,12 @@ def get_provider(settings: Settings, fast: bool = False) -> Provider:
     if settings.provider == "multi":
         # fast tier drops the slow Skyscanner provider (~40s) so the first
         # results render in ~3s; the full tier folds Skyscanner back in.
+        # Wizz (direct LCC fares, ~0.5s) is in both tiers — it's fast and
+        # surfaces cheap fares the aggregators miss.
+        fast_set = [KiwiRapidProvider(settings), KayakProvider(settings)]
+        if settings.wizz_enabled:
+            fast_set.append(WizzProvider(settings))
         if fast:
-            return MultiProvider([KiwiRapidProvider(settings), KayakProvider(settings)])
-        active = [KiwiRapidProvider(settings), KayakProvider(settings), SkyscannerProvider(settings)]
-        return MultiProvider(active)
+            return MultiProvider(fast_set)
+        return MultiProvider(fast_set + [SkyscannerProvider(settings)])
     return KiwiRapidProvider(settings)
