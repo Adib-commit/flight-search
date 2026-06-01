@@ -23,10 +23,16 @@
   <text x="103" y="354" text-anchor="middle" class="sub">app.js + HTML</text>
 
   <!-- CloudFront -->
-  <rect x="210" y="300" width="150" height="80" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.6"/>
-  <text x="285" y="328" text-anchor="middle" class="lbl">CloudFront</text>
-  <text x="285" y="346" text-anchor="middle" class="svc">+ ACM TLS</text>
-  <text x="285" y="362" text-anchor="middle" class="sub">caches /static/*</text>
+  <rect x="210" y="290" width="150" height="70" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.6"/>
+  <text x="285" y="316" text-anchor="middle" class="lbl">CloudFront</text>
+  <text x="285" y="334" text-anchor="middle" class="svc">+ ACM TLS</text>
+  <text x="285" y="350" text-anchor="middle" class="sub">2 origins</text>
+
+  <!-- S3 static -->
+  <rect x="210" y="400" width="150" height="74" rx="10" fill="#fefce8" stroke="#65a30d" stroke-width="1.6"/>
+  <text x="285" y="426" text-anchor="middle" class="lbl">S3 static site</text>
+  <text x="285" y="444" text-anchor="middle" class="sub">html · app.js</text>
+  <text x="285" y="460" text-anchor="middle" class="sub">airports.js · css</text>
 
   <!-- AWS account / VPC group -->
   <rect x="400" y="70" width="540" height="560" rx="14" fill="#ffffff" stroke="#ff9900" stroke-width="2" stroke-dasharray="7 4"/>
@@ -34,8 +40,8 @@
 
   <!-- Fargate web -->
   <rect x="430" y="120" width="220" height="86" rx="10" fill="#fff7ed" stroke="#ea580c" stroke-width="1.6"/>
-  <text x="540" y="148" text-anchor="middle" class="lbl">ECS Fargate — web</text>
-  <text x="540" y="166" text-anchor="middle" class="sub">FastAPI container</text>
+  <text x="540" y="148" text-anchor="middle" class="lbl">ECS Fargate — API only</text>
+  <text x="540" y="166" text-anchor="middle" class="sub">FastAPI /api/*</text>
   <text x="540" y="182" text-anchor="middle" class="sub">0.25 vCPU / 0.5 GB</text>
   <text x="540" y="198" text-anchor="middle" class="svc">RUN_SCHEDULER=off</text>
 
@@ -89,10 +95,14 @@
   <text x="1025" y="586" text-anchor="middle" class="sub">inbox</text>
 
   <!-- Edges -->
-  <path class="edge" d="M178,340 L208,340"/>
-  <text x="172" y="330" class="edgelbl">HTTPS</text>
-  <path class="edge" d="M360,332 C400,300 410,220 428,200"/>
-  <text x="362" y="270" class="edgelbl">/api/*</text>
+  <path class="edge" d="M178,330 L208,325"/>
+  <text x="166" y="318" class="edgelbl">HTTPS</text>
+  <!-- cloudfront -> S3 static -->
+  <path class="edge" d="M285,360 L285,398"/>
+  <text x="290" y="384" class="edgelbl">/ static</text>
+  <!-- cloudfront -> Fargate API -->
+  <path class="edge" d="M360,318 C400,290 410,230 428,200"/>
+  <text x="362" y="260" class="edgelbl">/api/* (CORS)</text>
 
   <!-- web -> dynamo -->
   <path class="edge" d="M650,160 L698,160"/>

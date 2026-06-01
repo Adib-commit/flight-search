@@ -77,13 +77,20 @@ within the 29 s API Gateway limit.
 <details>
 <summary>Same diagram as Mermaid source</summary>
 
+The frontend is a **static site** (HTML/JS, all logic via `fetch /api/*`), so it
+is served from **S3 + CloudFront** — no compute. ECS/Fargate runs **only the API**.
+
 ```mermaid
 flowchart LR
     user["Browser"]
-    cf["CloudFront<br/>(TLS, static cache)"]
+
+    subgraph pres["Presentation tier (static — no compute)"]
+        cf["CloudFront + ACM TLS"]
+        s3["S3 bucket<br/>index.html · app.js · airports.js · css"]
+    end
 
     subgraph vpc["AWS account / VPC"]
-        ecs["ECS Fargate task<br/>FastAPI container<br/>0.25 vCPU / 0.5 GB"]
+        ecs["ECS Fargate — API only<br/>FastAPI /api/*<br/>0.25 vCPU / 0.5 GB"]
         ddb["DynamoDB<br/>users + watches<br/>(on-demand)"]
         sm["Secrets Manager<br/>RapidAPI / JWT / SMTP"]
         ebr["EventBridge Scheduler<br/>rate(30 min)"]
@@ -94,7 +101,8 @@ flowchart LR
 
     rapidapi["RapidAPI providers<br/>Kiwi · Kayak · Skyscanner"]
 
-    user --> cf --> ecs
+    user -->|"GET / , /static/*"| cf --> s3
+    user -->|"/api/* (CORS)"| ecs
     ecs --> ddb
     ecs --> sm
     ecs --> rapidapi
@@ -105,6 +113,11 @@ flowchart LR
     ses --> alert["User email"]
 ```
 
+> CloudFront can also use **two origins** (S3 default + the API origin behind a
+> `/api/*` cache behavior) so everything lives under one domain. Cheapest route
+> for the API origin avoids an ALB — use App Runner / managed TLS, or a separate
+> `api.` subdomain on the compute host.
+
 </details>
 
 ---
@@ -114,7 +127,7 @@ flowchart LR
 | Current | Phase 1 (Lightsail) | Phase 2 (cloud-native) |
 |---------|--------------------|------------------------|
 | systemd + uvicorn | Same systemd unit on Lightsail instance | Container image on **ECS Fargate** |
-| Static frontend | Served by app | **CloudFront** in front (cache `/static/*`), or keep app-served |
+| Static frontend | Served by app | **S3 + CloudFront** (static site, no compute); app keeps only `/api/*` |
 | `data/*.json` | Files on instance + **snapshot backups** | **DynamoDB** (on-demand) tables `users`, `watches` |
 | In-process APScheduler | Keep as-is | **EventBridge Scheduler** → watcher task/Lambda (set `RUN_SCHEDULER=false` in web container) |
 | SMTP email | Existing SMTP, or point at **SES SMTP endpoint** | **Amazon SES** (API or SMTP) |
