@@ -6,6 +6,10 @@ low-traffic, personal-scale workload.
 
 > All prices are **rough monthly estimates in `us-east-1`** for planning only.
 > Verify against the AWS Pricing Calculator before committing.
+>
+> For a concrete starting-scale estimate (≤ 10 users/week) and the
+> domain/certificate breakdown, see
+> [AWS_COST_CALCULATOR.md](AWS_COST_CALCULATOR.md).
 
 ---
 
