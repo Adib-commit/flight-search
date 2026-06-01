@@ -6,6 +6,11 @@ with a background price-watcher that emails alerts.
 
 ## Deployment topology
 
+![Deployment architecture](docs/architecture.svg)
+
+<details>
+<summary>Same diagram as Mermaid source</summary>
+
 ```mermaid
 flowchart TB
     subgraph host["Host (Linux / WSL2) — systemd"]
@@ -47,6 +52,8 @@ flowchart TB
     smtp -->|alert| enduser["End-user email"]
     proc --> applog
 ```
+
+</details>
 
 ## Two-phase search flow
 
