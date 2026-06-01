@@ -268,10 +268,10 @@ async def me(user: dict = Depends(_get_current_user)) -> dict[str, Any]:
 # ── search ────────────────────────────────────────────────────────────────────
 
 @app.post("/api/search", response_model=SearchResponse)
-async def search(req: SearchRequest) -> SearchResponse:
+async def search(req: SearchRequest, tier: str = "full") -> SearchResponse:
     settings = get_settings()
     try:
-        return await run_search(req, settings)
+        return await run_search(req, settings, fast=(tier == "fast"))
     except (ValidationError, UnknownAirlineError) as e:
         raise HTTPException(status_code=422, detail=str(e))
     except NoResultsError as e:

@@ -619,22 +619,46 @@ form.addEventListener("submit", async (e) => {
   // even when the search returns no results or hits a filter error.
   saveSearch(payload);
 
-  try {
-    const resp = await fetch("/api/search", {
+  // Two-phase search: fast tier (Kiwi+Kayak, ~3s) renders first, then the
+  // full tier (adds Skyscanner, ~40s) replaces it when ready.
+  const _doSearch = async (tier) => {
+    const resp = await fetch(`/api/search?tier=${tier}`, {
       method: "POST",
       headers: authHeaders(),
       body: JSON.stringify(payload),
     });
     const data = await resp.json();
-    if (!resp.ok) {
-      statusEl.innerHTML = `<span class="error">${data.detail || "Search failed."}</span>`;
+    return { ok: resp.ok, data };
+  };
+
+  let fastShown = false;
+  try {
+    const fast = await _doSearch("fast");
+    if (fast.ok) {
+      statusEl.innerHTML = '<span class="loading">Checking Skyscanner for more deals…</span>';
+      fast.data._searchPayload = payload;
+      render(fast.data);
+      fastShown = true;
+    }
+    // Phase 2: full set (folds in Skyscanner). Replaces phase-1 results.
+    const full = await _doSearch("full");
+    if (!full.ok) {
+      if (!fastShown) {
+        statusEl.innerHTML = `<span class="error">${full.data.detail || "Search failed."}</span>`;
+      } else {
+        statusEl.innerHTML = '<span class="muted">Showing Kiwi + Kayak results (Skyscanner unavailable).</span>';
+      }
       return;
     }
     statusEl.innerHTML = "";
-    data._searchPayload = payload;
-    render(data);
+    full.data._searchPayload = payload;
+    render(full.data);
   } catch (err) {
-    statusEl.innerHTML = `<span class="error">Network error: ${err.message}</span>`;
+    if (!fastShown) {
+      statusEl.innerHTML = `<span class="error">Network error: ${err.message}</span>`;
+    } else {
+      statusEl.innerHTML = '<span class="muted">Showing partial results (network error fetching Skyscanner).</span>';
+    }
   }
 });
 // ── price watch ──────────────────────────────────────────────────────────────

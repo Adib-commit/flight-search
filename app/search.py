@@ -35,15 +35,19 @@ def _apply_pax_pricing(itineraries: list[Itinerary], pax: int) -> None:
         it.price_per_person = round(it.price_total, 2)
 
 
-async def run_search(req: SearchRequest, settings: Settings) -> SearchResponse:
-    """End-to-end: validate -> fetch (provider) -> filter -> score -> present."""
+async def run_search(req: SearchRequest, settings: Settings, fast: bool = False) -> SearchResponse:
+    """End-to-end: validate -> fetch (provider) -> filter -> score -> present.
+
+    fast=True drops the slow Skyscanner provider so the first page of results
+    returns in ~3s; the caller re-queries with fast=False to fold it in.
+    """
     t0 = datetime.now()
     validate_request(req)
 
     include_codes = resolve_codes(req.airline_filters.include)
     exclude_codes = resolve_codes(req.airline_filters.exclude)
 
-    provider = get_provider(settings)
+    provider = get_provider(settings, fast=fast)
 
     dep_s = req.flight_dates.departure.isoformat()
     ret_s = req.flight_dates.ret.isoformat() if req.flight_dates.ret else None

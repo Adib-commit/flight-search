@@ -172,7 +172,7 @@ class MultiProvider:
         return merged
 
 
-def get_provider(settings: Settings) -> Provider:
+def get_provider(settings: Settings, fast: bool = False) -> Provider:
     if settings.provider == "amadeus":
         return AmadeusProvider(settings)
     if settings.provider == "mock":
@@ -186,6 +186,10 @@ def get_provider(settings: Settings) -> Provider:
     if settings.provider == "skyscanner":
         return SkyscannerProvider(settings)
     if settings.provider == "multi":
+        # fast tier drops the slow Skyscanner provider (~40s) so the first
+        # results render in ~3s; the full tier folds Skyscanner back in.
+        if fast:
+            return MultiProvider([KiwiRapidProvider(settings), KayakProvider(settings)])
         active = [KiwiRapidProvider(settings), KayakProvider(settings), SkyscannerProvider(settings)]
         return MultiProvider(active)
     return KiwiRapidProvider(settings)
