@@ -72,6 +72,11 @@ within the 29 s API Gateway limit.
 
 ## 4. Recommended target architecture (Phase 2)
 
+![AWS target architecture](aws-architecture.svg)
+
+<details>
+<summary>Same diagram as Mermaid source</summary>
+
 ```mermaid
 flowchart LR
     user["Browser"]
@@ -99,6 +104,8 @@ flowchart LR
     watchtask --> ses
     ses --> alert["User email"]
 ```
+
+</details>
 
 ---
 

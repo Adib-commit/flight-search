@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="680" viewBox="0 0 1100 680" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="aws-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#475569"/>
+    </marker>
+    <style>
+      .lbl{font-size:13px;fill:#0f172a;font-weight:600}
+      .sub{font-size:10.5px;fill:#475569}
+      .svc{font-size:9px;fill:#92400e;font-weight:700}
+      .edge{stroke:#475569;stroke-width:1.6;fill:none;marker-end:url(#aws-arrow)}
+      .edgelbl{font-size:10px;fill:#334155}
+      .title{font-size:20px;fill:#0f172a;font-weight:700}
+      .grp{font-size:12px;fill:#64748b;font-weight:700}
+    </style>
+  </defs>
+
+  <rect width="1100" height="680" fill="#f8fafc"/>
+  <text x="28" y="40" class="title">Flight Search — AWS Target Architecture (Phase 2)</text>
+
+  <!-- Browser -->
+  <rect x="28" y="300" width="150" height="80" rx="10" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.6"/>
+  <text x="103" y="334" text-anchor="middle" class="lbl">Browser</text>
+  <text x="103" y="354" text-anchor="middle" class="sub">app.js + HTML</text>
+
+  <!-- CloudFront -->
+  <rect x="210" y="300" width="150" height="80" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.6"/>
+  <text x="285" y="328" text-anchor="middle" class="lbl">CloudFront</text>
+  <text x="285" y="346" text-anchor="middle" class="svc">+ ACM TLS</text>
+  <text x="285" y="362" text-anchor="middle" class="sub">caches /static/*</text>
+
+  <!-- AWS account / VPC group -->
+  <rect x="400" y="70" width="540" height="560" rx="14" fill="#ffffff" stroke="#ff9900" stroke-width="2" stroke-dasharray="7 4"/>
+  <text x="420" y="96" class="grp" fill="#b45309">AWS ACCOUNT / VPC — us-east-1 (or EU for lower provider RTT)</text>
+
+  <!-- Fargate web -->
+  <rect x="430" y="120" width="220" height="86" rx="10" fill="#fff7ed" stroke="#ea580c" stroke-width="1.6"/>
+  <text x="540" y="148" text-anchor="middle" class="lbl">ECS Fargate — web</text>
+  <text x="540" y="166" text-anchor="middle" class="sub">FastAPI container</text>
+  <text x="540" y="182" text-anchor="middle" class="sub">0.25 vCPU / 0.5 GB</text>
+  <text x="540" y="198" text-anchor="middle" class="svc">RUN_SCHEDULER=off</text>
+
+  <!-- DynamoDB -->
+  <rect x="700" y="120" width="210" height="86" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.6"/>
+  <text x="805" y="148" text-anchor="middle" class="lbl">DynamoDB</text>
+  <text x="805" y="166" text-anchor="middle" class="sub">users · watches</text>
+  <text x="805" y="182" text-anchor="middle" class="svc">on-demand</text>
+  <text x="805" y="198" text-anchor="middle" class="sub">~cents/mo</text>
+
+  <!-- Secrets Manager / SSM -->
+  <rect x="430" y="232" width="220" height="78" rx="10" fill="#fef2f2" stroke="#dc2626" stroke-width="1.6"/>
+  <text x="540" y="260" text-anchor="middle" class="lbl">Secrets Mgr / SSM</text>
+  <text x="540" y="278" text-anchor="middle" class="sub">RapidAPI key · JWT</text>
+  <text x="540" y="294" text-anchor="middle" class="sub">SMTP creds · IAM role</text>
+
+  <!-- CloudWatch -->
+  <rect x="700" y="232" width="210" height="78" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="1.6"/>
+  <text x="805" y="260" text-anchor="middle" class="lbl">CloudWatch</text>
+  <text x="805" y="278" text-anchor="middle" class="sub">logs · PERF metrics</text>
+  <text x="805" y="294" text-anchor="middle" class="sub">alarms</text>
+
+  <!-- EventBridge Scheduler -->
+  <rect x="430" y="430" width="220" height="78" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.6"/>
+  <text x="540" y="458" text-anchor="middle" class="lbl">EventBridge Scheduler</text>
+  <text x="540" y="476" text-anchor="middle" class="sub">rate(30 min)</text>
+  <text x="540" y="492" text-anchor="middle" class="sub">price watcher trigger</text>
+
+  <!-- Watcher task -->
+  <rect x="700" y="430" width="210" height="78" rx="10" fill="#fff7ed" stroke="#ea580c" stroke-width="1.6"/>
+  <text x="805" y="458" text-anchor="middle" class="lbl">Watcher task</text>
+  <text x="805" y="476" text-anchor="middle" class="sub">Fargate / Lambda</text>
+  <text x="805" y="492" text-anchor="middle" class="sub">run_checks_now()</text>
+
+  <!-- SES -->
+  <rect x="430" y="532" width="220" height="74" rx="10" fill="#fdf4ff" stroke="#c026d3" stroke-width="1.6"/>
+  <text x="540" y="560" text-anchor="middle" class="lbl">Amazon SES</text>
+  <text x="540" y="578" text-anchor="middle" class="sub">price-drop email</text>
+  <text x="540" y="594" text-anchor="middle" class="svc">$0.10 / 1k</text>
+
+  <!-- RapidAPI external -->
+  <rect x="965" y="160" width="120" height="120" rx="10" fill="#ecfeff" stroke="#0891b2" stroke-width="1.6"/>
+  <text x="1025" y="200" text-anchor="middle" class="lbl">RapidAPI</text>
+  <text x="1025" y="222" text-anchor="middle" class="sub">Kiwi</text>
+  <text x="1025" y="240" text-anchor="middle" class="sub">Kayak</text>
+  <text x="1025" y="258" text-anchor="middle" class="sub">Skyscanner</text>
+
+  <!-- user email external -->
+  <rect x="965" y="540" width="120" height="64" rx="10" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.6"/>
+  <text x="1025" y="568" text-anchor="middle" class="lbl">User email</text>
+  <text x="1025" y="586" text-anchor="middle" class="sub">inbox</text>
+
+  <!-- Edges -->
+  <path class="edge" d="M178,340 L208,340"/>
+  <text x="172" y="330" class="edgelbl">HTTPS</text>
+  <path class="edge" d="M360,332 C400,300 410,220 428,200"/>
+  <text x="362" y="270" class="edgelbl">/api/*</text>
+
+  <!-- web -> dynamo -->
+  <path class="edge" d="M650,160 L698,160"/>
+  <!-- web -> secrets -->
+  <path class="edge" d="M540,206 L540,230"/>
+  <!-- web -> cloudwatch -->
+  <path class="edge" d="M650,180 C680,200 700,215 720,230"/>
+  <!-- web -> rapidapi -->
+  <path class="edge" d="M650,140 C820,110 900,180 963,200"/>
+  <text x="720" y="118" class="edgelbl">fast + full tier</text>
+
+  <!-- eventbridge -> watcher -->
+  <path class="edge" d="M650,469 L698,469"/>
+  <!-- watcher -> dynamo (up) -->
+  <path class="edge" d="M805,430 L805,208"/>
+  <text x="812" y="330" class="edgelbl">RW watches</text>
+  <!-- watcher -> rapidapi -->
+  <path class="edge" d="M910,460 C950,400 970,320 985,282"/>
+  <!-- watcher -> ses -->
+  <path class="edge" d="M700,490 C660,510 620,520 650,545"/>
+  <text x="612" y="522" class="edgelbl">price drop</text>
+  <!-- ses -> user email -->
+  <path class="edge" d="M650,572 C800,580 900,576 963,572"/>
+</svg>
