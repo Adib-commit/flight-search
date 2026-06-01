@@ -116,20 +116,27 @@ class MultiProvider:
     async def search(self, **kw) -> list[Itinerary]:
         import asyncio
         import logging
+        import time
         log = logging.getLogger(__name__)
 
         async def _fetch_with_retry(provider, **kw) -> list[Itinerary]:
             """One retry after 2 s for transient failures."""
+            name = type(provider).__name__
+            t0 = time.monotonic()
             try:
-                return await provider.search(**kw)
+                out = await provider.search(**kw)
+                log.info("PERF provider=%s returned=%d in %.2fs", name, len(out), time.monotonic() - t0)
+                return out
             except Exception as e:
-                name = type(provider).__name__
-                log.warning("%s failed (attempt 1): %s — retrying in 2 s", name, e)
+                log.warning("%s failed (attempt 1) after %.2fs: %s — retrying in 2 s", name, time.monotonic() - t0, e)
                 await asyncio.sleep(2)
+                t1 = time.monotonic()
                 try:
-                    return await provider.search(**kw)
+                    out = await provider.search(**kw)
+                    log.info("PERF provider=%s returned=%d in %.2fs (retry)", name, len(out), time.monotonic() - t1)
+                    return out
                 except Exception as e2:
-                    log.error("%s failed (attempt 2): %s — skipping", name, e2)
+                    log.error("%s failed (attempt 2) after %.2fs: %s — skipping", name, time.monotonic() - t1, e2)
                     raise
 
         tasks = [asyncio.create_task(_fetch_with_retry(p, **kw)) for p in self._providers]
