@@ -58,7 +58,8 @@ bot-blocked, ToS-restricted, and flaky.
 ## Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full deployment topology and the
-two-phase search sequence. High-level view:
+two-phase search sequence, and [docs/AWS_MIGRATION.md](docs/AWS_MIGRATION.md) for
+the cost-effective AWS migration plan. High-level view:
 
 ```mermaid
 flowchart LR
