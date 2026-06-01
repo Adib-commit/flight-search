@@ -56,6 +56,41 @@ flight exists. Kiwi is the oracle because Skyscanner/Wizzair scraping is
 bot-blocked, ToS-restricted, and flaky.
 
 ## Architecture
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full deployment topology and the
+two-phase search sequence. High-level view:
+
+```mermaid
+flowchart LR
+    browser["Browser<br/>static/app.js"]
+
+    subgraph proc["uvicorn — app.main:app (systemd, :8000)"]
+        api["FastAPI routes<br/>/api/* · / · /static/*"]
+        search["search.py + scoring.py<br/>ValueScore ranking"]
+        mp["MultiProvider<br/>parallel fetch + dedupe"]
+        sched["APScheduler<br/>watcher 30m · health 10m"]
+    end
+
+    subgraph rapidapi["RapidAPI providers"]
+        kiwi["Kiwi ~2s"]
+        kayak["Kayak ~3s"]
+        sky["Skyscanner<br/>~40s cold / ~3s warm"]
+    end
+
+    files["data/*.json · logs/*.log"]
+    smtp["SMTP → user email"]
+
+    browser -->|"POST /api/search?tier=fast|full"| api
+    api --> search --> mp
+    mp -->|fast| kiwi & kayak
+    mp -->|full| kiwi & kayak & sky
+    api --> files
+    sched --> search
+    sched -->|price drop| smtp
+```
+
+File layout:
+
 ```
 app/
   config.py                  settings + weights + provider choice from .env
