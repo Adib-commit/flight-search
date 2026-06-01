@@ -270,11 +270,12 @@ async def _auto_split_suggestion(
                 return StopoverLegResult(label=label, date=d.isoformat(), options=[], cheapest_price=0.0, currency=settings.currency, error="No direct flight on this leg")
             _apply_pax_pricing(itins, req.traveler_count)
             scored = score_itineraries(sorted(itins, key=lambda x: x.price_total)[:15], settings)
-            top = scored[:3]
+            # Cheapest-first for display so the headline price matches the first card.
+            top = sorted(scored[:3], key=lambda it: it.price_total)
             return StopoverLegResult(
                 label=label, date=d.isoformat(),
                 options=[to_out(it) for it in top],
-                cheapest_price=min(it.price_total for it in top),
+                cheapest_price=top[0].price_total,
                 currency=top[0].currency,
             )
         except asyncio.TimeoutError:
@@ -380,8 +381,11 @@ async def run_stopover_search(req: StopoverRequest, settings: Settings) -> Stopo
             if not filtered:
                 filtered = sorted(itins, key=lambda x: x.price_total)[:10]
             scored = score_itineraries(filtered, settings)
-            top = scored[:5]
-            cheapest_price = min(it.price_total for it in top) if top else 0.0
+            # Present cheapest-first so the leg's headline ("From $X") matches
+            # the first card. Scoring picks the best-value 5, then we sort those
+            # by price for display.
+            top = sorted(scored[:5], key=lambda it: it.price_total)
+            cheapest_price = top[0].price_total if top else 0.0
             currency = top[0].currency if top else settings.currency
             return StopoverLegResult(
                 label=label,

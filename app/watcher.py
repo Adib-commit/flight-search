@@ -14,7 +14,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from .config import get_settings
 from .models import AirlineFilters, FlightDates, SearchRequest
 from .notifier import send_price_alert
-from .search import NoResultsError, run_search
+from .search import NoResultsError, run_search, run_split_suggestion
 
 logger = logging.getLogger(__name__)
 
@@ -165,13 +165,35 @@ async def _check_watch(watch: dict) -> None:
     new_price: float | None = cheapest.price_total if cheapest else None
     booking_url: str = cheapest.booking_url if cheapest else ""
     carriers: list[str] = cheapest.carrier_names if cheapest else []
+
+    # Also evaluate the multi-day split-ticket via the detected hub (e.g. OTP):
+    # 4 direct legs across days can beat the regular fare. Track whichever is
+    # lower so the watcher alerts on the genuinely cheapest option.
+    split_note = ""
+    try:
+        via = getattr(result, "split_via", None)
+        if via:
+            split = await run_split_suggestion(req, [], settings, via_override=via)
+            if split and split.legs and (new_price is None or split.total_price < new_price):
+                leg_carriers = [
+                    (L.options[0].carriers[0] if L.options and L.options[0].carriers else "?")
+                    for L in split.legs
+                ]
+                new_price = split.total_price
+                booking_url = (split.legs[0].options[0].booking_url
+                               if split.legs[0].options else "")
+                carriers = [f"split via {via}: " + "/".join(leg_carriers)]
+                split_note = f" [multi-day split via {via}]"
+    except Exception as e:
+        logger.warning("Watch %s: split check failed: %s", watch["id"], e)
+
     old_best = watch.get("best_price")  # None = no real baseline yet
 
     watch["last_checked"] = now
     watch["last_price"] = new_price
     entry: dict = {
         "checked_at": now, "price": new_price,
-        "carriers": carriers, "booking_url": booking_url, "note": "check",
+        "carriers": carriers, "booking_url": booking_url, "note": "check" + split_note,
     }
     watch.setdefault("price_history", []).append(entry)
     logger.info("WATCH %s result new_price=%s best=%s carriers=%s",
@@ -216,6 +238,7 @@ async def _check_watch(watch: dict) -> None:
     else:
         entry["note"] = "unchanged"
 
+    entry["note"] += split_note
     _save()
 
 
