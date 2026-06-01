@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Header, Request
-from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -49,6 +50,40 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Flight Optimization App", lifespan=lifespan)
+
+
+# ── friendly validation errors ─────────────────────────────────────────────────
+# Pydantic request-validation failures (e.g. a malformed date) default to a raw
+# array payload that the UI cannot render. Convert them to a single clear string.
+
+_FIELD_LABELS = {
+    "departure": "Departure date",
+    "ret": "Return date",
+    "return": "Return date",
+    "origin": "Origin",
+    "destination": "Destination",
+    "traveler_count": "Number of travelers",
+    "max_price": "Max price",
+    "max_connections": "Max connections",
+    "date": "Date",
+}
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    parts: list[str] = []
+    for err in exc.errors():
+        loc = [p for p in err.get("loc", []) if p != "body"]
+        field = next((str(p) for p in reversed(loc) if str(p) in _FIELD_LABELS), loc[-1] if loc else "input")
+        label = _FIELD_LABELS.get(str(field), str(field))
+        msg = err.get("msg", "is invalid")
+        bad = err.get("input")
+        if "date" in str(field).lower() or label.endswith("date"):
+            parts.append(f"{label}: '{bad}' is not a valid date (use YYYY-MM-DD).")
+        else:
+            parts.append(f"{label}: {msg}.")
+    detail = " ".join(parts) or "Invalid request."
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 # ── auth helpers ──────────────────────────────────────────────────────────────

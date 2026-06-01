@@ -157,13 +157,22 @@ async def run_search(req: SearchRequest, settings: Settings) -> SearchResponse:
         bv = scored[0]
         cheapest = min(scored, key=lambda it: it.price_total)
         fastest = min(scored, key=lambda it: it.total_duration_min)
+
+        def _route(it: Itinerary) -> str:
+            segs = [s for s in it.segments if s.direction in ("outbound", "")] or it.segments
+            pts = list(dict.fromkeys(s.origin for s in segs)) + ([segs[-1].destination] if segs else [])
+            return "→".join(pts) or "?"
+
         logger.info(
-            "SEARCH done in %.2fs | considered=%d | BEST %.2f %s [%s] stops=%d dur=%dmin lay=%dmin score=%s | cheapest=%.2f fastest=%dmin via=%s",
+            "SEARCH done in %.2fs | considered=%d | BEST %.2f %s [%s] %s stops=%d dur=%dmin lay=%dmin score=%s | "
+            "CHEAPEST %.2f [%s] %s stops=%d dur=%dmin url=%s | fastest=%dmin via=%s",
             (datetime.now() - t0).total_seconds(), len(scored),
-            bv.price_total, bv.currency, "+".join(bv.carriers), bv.stops_count,
+            bv.price_total, bv.currency, "+".join(bv.carriers), _route(bv), bv.stops_count,
             bv.total_duration_min, bv.layover_min,
             f"{bv.score:.3f}" if bv.score is not None else "-",
-            cheapest.price_total, fastest.total_duration_min, response.split_via or "-",
+            cheapest.price_total, "+".join(cheapest.carriers), _route(cheapest),
+            cheapest.stops_count, cheapest.total_duration_min, cheapest.booking_url or "-",
+            fastest.total_duration_min, response.split_via or "-",
         )
     return response
 
