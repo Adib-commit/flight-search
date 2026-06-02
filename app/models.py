@@ -119,6 +119,7 @@ class SearchResponse(BaseModel):
     total_considered: int
     markdown: str
     split_via: str | None = None     # detected via airport for frontend to show spinner
+    notice: str | None = None        # explanation when filters removed all results (200, not 404)
 
 
 # ---- multi-day stopover (open-jaw) ----

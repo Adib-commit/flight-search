@@ -244,10 +244,15 @@ function fallbackBookUrl(o) {
   const segs = o.segments || [];
   if (!segs.length) return "";
   const origin  = segs[0].origin;
-  const dest    = segs[segs.length - 1].destination;
-  const depDate = (segs[0].departure_at || "").slice(0, 10);
   const inSegs  = segs.filter(s => s.direction === "inbound");
-  const retDate = inSegs.length ? (inSegs[inSegs.length - 1].arrival_at || "").slice(0, 10) : "";
+  const outSegs = segs.filter(s => s.direction === "outbound" || s.direction === "");
+  // The destination for the kiwi search is the TURNAROUND city (end of the
+  // outbound leg), NOT the last segment's destination — on a round trip the
+  // last segment lands back at the origin, which would produce a bogus
+  // TLV/TLV search that returns nothing.
+  const dest    = (outSegs.length ? outSegs[outSegs.length - 1].destination : segs[segs.length - 1].destination);
+  const depDate = (segs[0].departure_at || "").slice(0, 10);
+  const retDate = inSegs.length ? (inSegs[0].departure_at || "").slice(0, 10) : "";
   if (retDate) {
     return `https://www.kiwi.com/en/search/results/${origin}/${dest}/${depDate}/${retDate}?adults=1`;
   }
@@ -489,7 +494,17 @@ function topPicks(data) {
 }
 
 function render(data) {
-  let html = topPicks(data);
+  let html = "";
+  if (data.notice) {
+    // Filters removed every regular itinerary (e.g. all over max price). Show the
+    // reason but keep going — a multi-day split via the hub may still fit budget.
+    html += `<div class="card" style="border-left:4px solid #f59e0b">
+      <h3>⚠️ No regular itinerary matched your filters</h3>
+      <p class="sub">${data.notice}</p>
+      ${data.split_via ? `<p class="sub">Checking an agent-built multi-day split via <b>${data.split_via}</b> — it may still beat your budget…</p>` : ""}
+    </div>`;
+  }
+  html += topPicks(data);
   html += costChart(data);
   html += allRoutes(data);
   if (data.split_via) {
@@ -503,7 +518,8 @@ function render(data) {
 
   if (data.split_via) {
     const cheapestRegular = data.cheapest?.price_total || 0;
-    _fetchSplitSuggestion(data._searchPayload, data.split_via, cheapestRegular, data.options || []);
+    const maxPrice = data._searchPayload?.max_price || null;
+    _fetchSplitSuggestion(data._searchPayload, data.split_via, cheapestRegular, data.options || [], maxPrice);
   }
 }
 
@@ -663,7 +679,7 @@ form.addEventListener("submit", async (e) => {
 });
 // ── price watch ──────────────────────────────────────────────────────────────
 
-async function _fetchSplitSuggestion(searchPayload, via, cheapestRegular, regularOptions) {
+async function _fetchSplitSuggestion(searchPayload, via, cheapestRegular, regularOptions, maxPrice) {
   const area = document.getElementById("split-suggestion-area");
   if (!area) return;
   try {
@@ -673,6 +689,11 @@ async function _fetchSplitSuggestion(searchPayload, via, cheapestRegular, regula
       body: JSON.stringify({ search: searchPayload, via }),
     });
     const split = resp.ok ? await resp.json() : null;
+    // Honour the budget: a split that exceeds max price isn't a valid offer.
+    if (split && split.legs && split.legs.length && maxPrice && split.total_price > maxPrice) {
+      area.outerHTML = `<div class="card split-card"><p class="split-desc">No split-ticket via <b>${via}</b> under your $${maxPrice.toFixed(0)} budget: cheapest multi-day combo is $${split.total_price.toFixed(2)}.</p></div>`;
+      return;
+    }
     const cheaper = !cheapestRegular || cheapestRegular <= 0 || (split && split.total_price < cheapestRegular);
     if (split && split.legs && split.legs.length && cheaper) {
       const newHtml = renderSplitSuggestion(split, cheapestRegular);

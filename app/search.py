@@ -148,7 +148,16 @@ async def run_search(req: SearchRequest, settings: Settings, fast: bool = False)
                 f"Try loosening your filters."
             )
 
-        raise NoResultsError(" ".join(parts))
+        # Don't 404: a multi-day split via the hub (e.g. OTP) may still beat the
+        # budget even when every regular itinerary is over it. Return an empty
+        # 200 response that carries the explanation + detected via airport so the
+        # frontend can render the notice AND still fetch the split suggestion.
+        return SearchResponse(
+            best_value=[], cheapest=None, fastest=None, options=[],
+            total_considered=len(itineraries), markdown="",
+            split_via=_find_via_airport(itineraries),
+            notice=" ".join(parts),
+        )
 
     sane = prune_unreasonable(filtered)
     logger.info("SEARCH prune kept %d/%d (dropped outliers)", len(sane), len(filtered))
