@@ -267,6 +267,13 @@ function providerLabel(url) {
   return "Book";
 }
 
+// One-way Kiwi search for a single direction — reproducible per leg, unlike a
+// combined round-trip search which won't surface a synthesized self-transfer.
+function oneWayKiwi(orig, dest, dateISO) {
+  const d = (dateISO || "").slice(0, 10);
+  return `https://www.kiwi.com/en/search/results/${orig}/${dest}/${d}/no-return?adults=1`;
+}
+
 // Render the full route path (every segment) for one itinerary.
 function routePath(o) {
   if (!o.segments || !o.segments.length) return "";
@@ -286,10 +293,23 @@ function routePath(o) {
     html = renderLeg(o.segments, "✈ Flight details");
   }
 
-  const effectiveUrl = o.booking_url || fallbackBookUrl(o);
-  const bookLink = effectiveUrl
-    ? `<a class="book-link" href="${effectiveUrl}" target="_blank" rel="noopener">🔗 ${providerLabel(o.booking_url)}</a>`
-    : "";
+  let bookLink;
+  if (o.booking_url) {
+    // Real provider fare — single bookable ticket.
+    bookLink = `<a class="book-link" href="${o.booking_url}" target="_blank" rel="noopener">🔗 ${providerLabel(o.booking_url)}</a>`;
+  } else {
+    // No single bookable fare: this is a stitched / self-transfer combo (often
+    // mixed airlines via a hub). A combined round-trip search won't reproduce
+    // it, so give per-direction one-way search links that actually do — and say
+    // so plainly, since the legs must be booked separately.
+    const outO = outSegs[0]?.origin, outD = outSegs[outSegs.length - 1]?.destination;
+    let links = `<a class="book-link" href="${oneWayKiwi(outO, outD, outSegs[0]?.departure_at)}" target="_blank" rel="noopener">🔗 Search outbound ${outO}→${outD}</a>`;
+    if (inSegs.length) {
+      const inO = inSegs[0]?.origin, inD = inSegs[inSegs.length - 1]?.destination;
+      links += ` <a class="book-link" href="${oneWayKiwi(inO, inD, inSegs[0]?.departure_at)}" target="_blank" rel="noopener">🔗 Search return ${inO}→${inD}</a>`;
+    }
+    bookLink = `<p class="split-desc">⚠ Self-transfer / multi-airline — no single ticket. Verify & book each direction separately:</p>${links}`;
+  }
 
   return html + bookLink;
 }
