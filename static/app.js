@@ -6,9 +6,11 @@ if (!_token) { window.location.href = "/login"; }
 
 // ── auto sign-out after 2 minutes of inactivity ───────────────────────────────
 let _inactivityTimer;
+let _pendingRequests = 0;   // active fetches; never log out while > 0
 function _resetInactivityTimer() {
   clearTimeout(_inactivityTimer);
   _inactivityTimer = setTimeout(() => {
+    if (_pendingRequests > 0) { _resetInactivityTimer(); return; }  // search running
     alert("Your session has expired after 2 minutes of inactivity. You will be signed out.");
     logout();
   }, 2 * 60 * 1000);
@@ -16,6 +18,18 @@ function _resetInactivityTimer() {
 ["mousemove", "keydown", "click", "scroll", "touchstart"].forEach(evt =>
   document.addEventListener(evt, _resetInactivityTimer, { passive: true })
 );
+// A network request in flight IS activity — a long search (fast+full+split can
+// run minutes while the user only watches the spinner) must not trip the
+// inactivity logout. Reset on every fetch start and completion.
+const _origFetch = window.fetch.bind(window);
+window.fetch = (...args) => {
+  _pendingRequests++;
+  _resetInactivityTimer();
+  return _origFetch(...args).finally(() => {
+    _pendingRequests = Math.max(0, _pendingRequests - 1);
+    _resetInactivityTimer();
+  });
+};
 _resetInactivityTimer(); // start on page load
 
 function logout() {

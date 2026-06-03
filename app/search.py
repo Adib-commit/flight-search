@@ -35,6 +35,93 @@ def _apply_pax_pricing(itineraries: list[Itinerary], pax: int) -> None:
         it.price_per_person = round(it.price_total, 2)
 
 
+# Minimum gap between a leg's arrival and the next leg's departure. Split legs
+# are SEPARATE tickets changing planes at the hub, so a real buffer is needed —
+# but the hard rule is simply that a leg may never depart BEFORE the prior leg
+# lands (the bug this guards: an overnight leg 1 arriving next morning paired
+# with a cheap early leg 2 the same morning).
+_SPLIT_MIN_CONNECT_MIN = 60
+
+
+def _parse_dt(s: str) -> datetime | None:
+    """Parse a segment ISO datetime; return naive local time (tz dropped so legs
+    from different providers compare on what the traveler actually sees)."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def _opt_depart(opt) -> datetime | None:
+    return _parse_dt(opt.segments[0].departure_at) if opt.segments else None
+
+
+def _opt_arrive(opt) -> datetime | None:
+    return _parse_dt(opt.segments[-1].arrival_at) if opt.segments else None
+
+
+def _chronological_plan(
+    legs: list[StopoverLegResult], min_connect_min: int = _SPLIT_MIN_CONNECT_MIN,
+) -> tuple[float, list[int]] | None:
+    """Pick one option per leg forming the CHEAPEST chronologically valid chain:
+    each leg's chosen flight must depart >= the prior leg's arrival + buffer.
+
+    Returns (total_price, chosen_option_index_per_leg) or None if no chain fits
+    (e.g. every leg-2 option departs before leg 1 can land). Pure: does not
+    mutate the legs. DP over <=~3 options x <=4 legs, so brute-cheap.
+
+    When a time can't be parsed for either side of a pair, the pair is allowed —
+    we never fabricate an infeasibility we can't prove."""
+    opts = [leg.options for leg in legs]
+    if any(not o for o in opts):
+        return None
+    buffer = timedelta(minutes=min_connect_min)
+    n = len(legs)
+    INF = float("inf")
+    dp = [[INF] * len(o) for o in opts]
+    nxt = [[-1] * len(o) for o in opts]
+    for j, o in enumerate(opts[n - 1]):
+        dp[n - 1][j] = o.price_total
+    for i in range(n - 2, -1, -1):
+        for j, oj in enumerate(opts[i]):
+            arr = _opt_arrive(oj)
+            best, bk = INF, -1
+            for k, ok in enumerate(opts[i + 1]):
+                dep = _opt_depart(ok)
+                if arr is not None and dep is not None and dep < arr + buffer:
+                    continue  # leg i+1 would depart before leg i lands (+buffer)
+                if dp[i + 1][k] < best:
+                    best, bk = dp[i + 1][k], k
+            if bk != -1:
+                dp[i][j] = oj.price_total + best
+                nxt[i][j] = bk
+    start = min(range(len(opts[0])), key=lambda j: dp[0][j])
+    if dp[0][start] == INF:
+        return None
+    chosen = [0] * n
+    j = start
+    for i in range(n):
+        chosen[i] = j
+        if i < n - 1:
+            j = nxt[i][j]
+    return round(dp[0][start], 2), chosen
+
+
+def _reorder_to_plan(legs: list[StopoverLegResult], chosen: list[int]) -> list[StopoverLegResult]:
+    """Copy each leg with its chosen option moved to options[0] (the headline)
+    and cheapest_price updated to match. Copies so shared legs aren't mutated."""
+    out: list[StopoverLegResult] = []
+    for leg, c in zip(legs, chosen):
+        lc = leg.model_copy(deep=True)
+        if c != 0:
+            lc.options.insert(0, lc.options.pop(c))
+        lc.cheapest_price = lc.options[0].price_total
+        out.append(lc)
+    return out
+
+
 async def run_search(req: SearchRequest, settings: Settings, fast: bool = False) -> SearchResponse:
     """End-to-end: validate -> fetch (provider) -> filter -> score -> present.
 
@@ -256,7 +343,7 @@ async def _auto_split_suggestion(
         leg_providers.append(WizzProvider(settings))
     fast_provider = MultiProvider(leg_providers)
 
-    async def _one_leg(orig: str, dest: str, d: date) -> StopoverLegResult:
+    async def _one_leg(orig: str, dest: str, d: date, _attempt: int = 0) -> StopoverLegResult:
         label = f"{orig} → {dest}"
         try:
             itins = await asyncio.wait_for(
@@ -276,6 +363,13 @@ async def _auto_split_suggestion(
             # itinerary that has its own stops. A split = 4 direct hops via OTP.
             itins = [it for it in itins if it.stops_count == 0]
             if not itins:
+                # An empty leg may be a transient upstream miss (429/503/throttle)
+                # rather than a true absence of direct flights. Retry once before
+                # giving up — a single fixed-leg miss otherwise nulls the whole
+                # split and shows a false "no cheaper split" in the UI.
+                if _attempt == 0:
+                    await asyncio.sleep(1.5)
+                    return await _one_leg(orig, dest, d, _attempt + 1)
                 return StopoverLegResult(label=label, date=d.isoformat(), options=[], cheapest_price=0.0, currency=settings.currency, error="No direct flight on this leg")
             _apply_pax_pricing(itins, req.traveler_count)
             scored = score_itineraries(sorted(itins, key=lambda x: x.price_total)[:15], settings)
@@ -288,8 +382,13 @@ async def _auto_split_suggestion(
                 currency=top[0].currency,
             )
         except asyncio.TimeoutError:
+            if _attempt == 0:
+                return await _one_leg(orig, dest, d, _attempt + 1)
             return StopoverLegResult(label=label, date=d.isoformat(), options=[], cheapest_price=0.0, currency=settings.currency, error="Timeout")
         except Exception as exc:
+            if _attempt == 0:
+                await asyncio.sleep(1.5)
+                return await _one_leg(orig, dest, d, _attempt + 1)
             return StopoverLegResult(label=label, date=d.isoformat(), options=[], cheapest_price=0.0, currency=settings.currency, error=str(exc)[:80])
 
     if ret:
@@ -325,19 +424,27 @@ async def _auto_split_suggestion(
         if not leg1.options or not leg4.options:
             return None
 
-        # Pick the combination with cheapest total. Combos where the middle
-        # legs have no direct flight are skipped (never fabricate a $0 leg).
+        # Pick the cheapest combination that is also CHRONOLOGICALLY VALID:
+        # each leg must depart after the previous leg lands (+ connection buffer).
+        # Combos where the middle legs have no direct flight, or where no valid
+        # time-ordered chain exists, are skipped (never fabricate a $0 leg or an
+        # itinerary whose leg 2 departs before leg 1 has landed).
         best: StopoverResponse | None = None
+        best_total: float | None = None
         for mid_dep, mid_ret in mid_combos:
             leg2, leg3 = leg2_map[mid_dep], leg3_map[mid_ret]
             if leg2.error or leg3.error or not leg2.options or not leg3.options:
                 continue
-            total = (leg1.cheapest_price + leg2.cheapest_price +
-                     leg3.cheapest_price + leg4.cheapest_price)
-            if best is None or total < best.total_price:
+            legs = [leg1, leg2, leg3, leg4]
+            plan = _chronological_plan(legs)
+            if plan is None:
+                continue   # no time-ordered chain for this date combo
+            total, chosen = plan
+            if best_total is None or total < best_total:
+                best_total = total
                 best = StopoverResponse(
-                    legs=[leg1, leg2, leg3, leg4],
-                    total_price=round(total, 2),
+                    legs=_reorder_to_plan(legs, chosen),
+                    total_price=total,
                     currency=settings.currency,
                 )
         return best
@@ -350,9 +457,23 @@ async def _auto_split_suggestion(
         valid = [(r, d) for r, d in zip(leg2_results, leg2_dates) if not r.error and r.options]
         if not valid:
             return None
-        leg2 = min(valid, key=lambda x: x[0].cheapest_price)[0]
-        total = round(leg1.cheapest_price + leg2.cheapest_price, 2)
-        return StopoverResponse(legs=[leg1, leg2], total_price=total, currency=settings.currency)
+        # Cheapest leg 2 that still departs after leg 1 lands (+ buffer). A cheap
+        # leg 2 that boards before leg 1 arrives is not a real connection.
+        best: StopoverResponse | None = None
+        best_total: float | None = None
+        for r, _ in sorted(valid, key=lambda x: x[0].cheapest_price):
+            legs = [leg1, r]
+            plan = _chronological_plan(legs)
+            if plan is None:
+                continue
+            total, chosen = plan
+            if best_total is None or total < best_total:
+                best_total = total
+                best = StopoverResponse(
+                    legs=_reorder_to_plan(legs, chosen),
+                    total_price=total, currency=settings.currency,
+                )
+        return best
 
 
 async def run_stopover_search(req: StopoverRequest, settings: Settings) -> StopoverResponse:
@@ -413,10 +534,18 @@ async def run_stopover_search(req: StopoverRequest, settings: Settings) -> Stopo
                 error=str(exc),
             )
 
-    results = await asyncio.gather(*[_search_one(leg) for leg in req.legs])
+    results = list(await asyncio.gather(*[_search_one(leg) for leg in req.legs]))
+    # Best-effort: reorder each leg's options so the headline chain is time-valid
+    # (leg n+1 departs after leg n lands). Only when every leg returned options;
+    # otherwise leave as-is (user explicitly requested these legs).
+    if all(not r.error and r.options for r in results):
+        plan = _chronological_plan(results)
+        if plan is not None:
+            _, chosen = plan
+            results = _reorder_to_plan(results, chosen)
     total_price = sum(r.cheapest_price for r in results)
     return StopoverResponse(
-        legs=list(results),
+        legs=results,
         total_price=round(total_price, 2),
         currency=settings.currency,
     )
