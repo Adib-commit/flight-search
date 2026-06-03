@@ -14,7 +14,7 @@ from .models import (
     StopoverLegRequest, StopoverLegResult, StopoverRequest, StopoverResponse,
 )
 from .output import build_response, to_out
-from .providers import get_provider, KayakProvider, KiwiRapidProvider, MultiProvider, WizzProvider
+from .providers import get_provider, KayakProvider, KiwiRapidProvider, MultiProvider, SkyscannerProvider, WizzProvider
 from .scoring import score_itineraries
 from .validation import validate_request
 
@@ -335,10 +335,11 @@ async def _auto_split_suggestion(
     dep: date = req.flight_dates.departure
     ret: date | None = req.flight_dates.ret
 
-    # Use KiwiRapid + Kayak (+ Wizz direct) for the legs — skips the slow
-    # Skyscanner provider but keeps regional direct coverage (e.g. Kayak has
-    # direct OTP→CLJ that Kiwi lacks) plus cheap Wizz LCC fares (TLV↔OTP).
-    leg_providers = [KiwiRapidProvider(settings), KayakProvider(settings)]
+    # KiwiRapid + Kayak give regional direct coverage (e.g. Kayak has direct
+    # OTP→CLJ that Kiwi lacks) plus Wizz direct LCC fares (TLV↔OTP). Skyscanner
+    # is added too so split-leg fares reconcile with what the user sees on
+    # Skyscanner — it's slower (cold call), so the per-leg timeout is widened.
+    leg_providers = [KiwiRapidProvider(settings), KayakProvider(settings), SkyscannerProvider(settings)]
     if settings.wizz_enabled:
         leg_providers.append(WizzProvider(settings))
     fast_provider = MultiProvider(leg_providers)
@@ -357,7 +358,7 @@ async def _auto_split_suggestion(
                     included_airlines=None, excluded_airlines=None,
                     currency=settings.currency,
                 ),
-                timeout=25,
+                timeout=45,   # widened to let the slow Skyscanner cold-call return
             )
             # Enforce direct: providers don't all honor non_stop, so drop any leg
             # itinerary that has its own stops. A split = 4 direct hops via OTP.

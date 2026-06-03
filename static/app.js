@@ -968,6 +968,75 @@ function fillRoundTrip() {
   }
 })();
 
+// ── Stopover recent searches ────────────────────────────────────────────────
+const STOPOVER_RECENT_KEY = "flight_stopover_recent";
+const STOPOVER_RECENT_MAX = 5;
+
+function _svKey(p) {
+  // Signature: ordered legs (route+date) + pax + filters, so re-running the
+  // same multi-day itinerary dedupes.
+  return (p.legs || []).map(l => `${l.origin}>${l.destination}@${l.date}`).join("|")
+    + `#${p.traveler_count || 1}#${p.max_connections ?? ""}#${p.max_price ?? ""}`;
+}
+
+function saveStopoverSearch(payload) {
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem(STOPOVER_RECENT_KEY) || "[]"); } catch (_) {}
+  list = list.filter(s => _svKey(s) !== _svKey(payload));
+  list.unshift({ ...payload, _saved: new Date().toISOString() });
+  list = list.slice(0, STOPOVER_RECENT_MAX);
+  localStorage.setItem(STOPOVER_RECENT_KEY, JSON.stringify(list));
+  renderStopoverRecent();
+}
+
+function applyStopoverSearch(payload) {
+  _stopoverLegs = (payload.legs || []).map(l => ({ origin: l.origin, destination: l.destination, date: l.date }));
+  _renderStopoverLegsUI();
+  const t = document.getElementById("sv-travelers"); if (t) t.value = payload.traveler_count || 1;
+  const c = document.getElementById("sv-max-conn");  if (c) c.value = payload.max_connections != null ? String(payload.max_connections) : "";
+  const m = document.getElementById("sv-max-price"); if (m) m.value = payload.max_price || "";
+  const sec = document.getElementById("stopover-section"); if (sec) sec.open = true;
+  sec?.scrollIntoView({ behavior: "smooth", block: "start" });
+  searchStopover();
+}
+
+function renderStopoverRecent() {
+  const container = document.getElementById("stopover-recent");
+  if (!container) { setTimeout(renderStopoverRecent, 100); return; }
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem(STOPOVER_RECENT_KEY) || "[]"); } catch (_) {}
+  if (!list.length) {
+    container.innerHTML = `<div class="recent-searches-bar"><span class="recent-label">🕒 Recent stopovers:</span><span style="color:#475569;font-size:.78rem;padding:.3rem 0">None yet — your multi-day searches appear here.</span></div>`;
+    return;
+  }
+  const chips = list.map((s, i) => {
+    const route = (s.legs || []).map(l => l.origin).concat((s.legs || []).slice(-1).map(l => l.destination)).join(" → ");
+    const d0 = s.legs?.[0]?.date || "";
+    const dN = s.legs?.[s.legs.length - 1]?.date || "";
+    const span = d0 && dN ? `${d0}${dN !== d0 ? " … " + dN : ""}` : "";
+    const pax  = s.traveler_count > 1 ? `, ${s.traveler_count} pax` : "";
+    const conn = s.max_connections != null ? `, max ${s.max_connections}/leg` : "";
+    return `<button class="recent-chip" onclick="applyStopoverSearch(stopoverRecentList[${i}])" title="Click to re-run this multi-day search">
+      <span class="recent-route">${route}</span>
+      <span class="recent-meta">${s.legs?.length || 0} legs · ${span}${pax}${conn}</span>
+    </button>`;
+  }).join("");
+  container.innerHTML = `
+    <div class="recent-searches-bar">
+      <span class="recent-label">🕒 Recent stopovers:</span>
+      <div class="recent-chips">${chips}</div>
+      <button class="recent-clear" onclick="clearStopoverRecent()" title="Clear history">✕ Clear</button>
+    </div>`;
+  window.stopoverRecentList = list;
+}
+
+function clearStopoverRecent() {
+  localStorage.removeItem(STOPOVER_RECENT_KEY);
+  renderStopoverRecent();
+}
+
+renderStopoverRecent();
+
 async function searchStopover() {
   const statusEl = document.getElementById("stopover-status");
   const resultsEl = document.getElementById("stopover-results");
@@ -1000,6 +1069,10 @@ async function searchStopover() {
     ...(maxConn !== "" ? { max_connections: parseInt(maxConn) } : {}),
     ...(maxPrice ? { max_price: parseFloat(maxPrice) } : {}),
   };
+
+  // Save to stopover recent searches before the API call so it persists even
+  // when the search returns no results.
+  saveStopoverSearch(payload);
 
   statusEl.innerHTML = `<span class="loading">Searching ${legs.length} legs in parallel…</span>`;
   try {
