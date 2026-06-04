@@ -129,6 +129,23 @@ def transform_result(result: dict, legs_dict: dict, segs_dict: dict, airports: d
     total_stops = sum(stops_per_dir)
     max_stops = max(stops_per_dir) if stops_per_dir else total_stops
 
+    # The per-fare `book/flight?code=` deeplink is session-scoped and expires
+    # fast — reopening it later makes Kayak fall back to "anything for this city
+    # pair", which can surface a BUS/train instead of the flight. For one-way
+    # legs (split tickets) replace it with a STABLE search URL pinned to the
+    # exact route + date + carrier + stop-count, so the link always lands on the
+    # real flight and never decays into ground transport.
+    if len(leg_refs) == 1 and segments:
+        o = segments[0].origin
+        d = segments[-1].destination
+        dep_date = (segments[0].departure_at or "")[:10]
+        if o and d and dep_date:
+            url = f"{KAYAK_BASE}/flights/{o}-{d}/{dep_date}?sort=price_a"
+            filters = [f"stops={total_stops}"]
+            if carriers and "?" not in carriers:
+                filters.append("airlines=" + ",".join(carriers))
+            booking_url = url + "&fs=" + ";".join(filters)
+
     return Itinerary(
         id=result_id,
         price_total=price,
