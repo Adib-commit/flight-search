@@ -420,6 +420,25 @@ async def delete_watch(
     return {}
 
 
+@app.delete("/api/watches/{watch_id}/history")
+async def clear_watch_history(
+    watch_id: str,
+    user: dict = Depends(_get_current_user),
+) -> dict:
+    """Clear one watch's price history (admin, or the watch's owner)."""
+    uid = None if user.get("role") == "admin" else user["id"]
+    if not watcher.clear_history(watch_id, user_id=uid):
+        raise HTTPException(status_code=404, detail="Watch not found.")
+    return {"cleared": watch_id}
+
+
+@app.delete("/api/admin/watches/history")
+async def admin_clear_all_history(_: dict = Depends(_require_admin)) -> dict:
+    """Clear price history for ALL watches (admin only)."""
+    count = watcher.clear_all_history(user_id=None)
+    return {"cleared_watches": count}
+
+
 @app.post("/api/watches/{watch_id}/test-email")
 async def test_watch_email(
     watch_id: str,

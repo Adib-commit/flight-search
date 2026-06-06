@@ -108,6 +108,36 @@ def remove_watch(watch_id: str, user_id: str | None = None) -> bool:
     return True
 
 
+def clear_history(watch_id: str, user_id: str | None = None) -> bool:
+    """Empty a watch's price_history and re-baseline its price tracking so the
+    next check starts fresh (no stale 'previous best' to compare against)."""
+    w = _watches.get(watch_id)
+    if not w:
+        return False
+    if user_id is not None and w.get("user_id") != user_id:
+        return False
+    w["price_history"] = []
+    w["best_price"] = None
+    w["last_price"] = None
+    _save()
+    return True
+
+
+def clear_all_history(user_id: str | None = None) -> int:
+    """Clear history for all watches (or all of one user's). Returns count cleared."""
+    n = 0
+    for w in _watches.values():
+        if user_id is not None and w.get("user_id") != user_id:
+            continue
+        w["price_history"] = []
+        w["best_price"] = None
+        w["last_price"] = None
+        n += 1
+    if n:
+        _save()
+    return n
+
+
 def list_watches(user_id: str | None = None) -> list[dict]:
     if user_id is None:
         return list(_watches.values())

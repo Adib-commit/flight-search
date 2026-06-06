@@ -50,6 +50,8 @@
     <h2 style="margin-top:1.5rem">Users &amp; Searches</h2>
     <p class="sub">Manage registered users, their price watches, and full price history.</p>
 
+    <p><button type="button" onclick="clearAllHistory()" style="background:#7f1d1d;color:#fecaca;border:1px solid #b91c1c;padding:.4rem .8rem;border-radius:6px;cursor:pointer">🗑 Clear ALL watch history</button></p>
+
     <div id="admin-status"></div>
 
     <!-- ── Add User form ─────────────────────────────────────────────────── -->
@@ -137,6 +139,7 @@
           <td>${fmtDate(w.last_checked)}</td>
           <td>
             <span class="hist-toggle" onclick="toggleHist('${w.id}')">📋 ${histCount} checks ▾</span>
+            ${histCount ? `<br><span class="hist-toggle" style="color:#f87171" onclick="clearHistory('${w.id}')">🗑 clear history</span>` : ""}
           </td>
         </tr>
         <tr class="watch-sub">
@@ -149,6 +152,36 @@
     function toggleHist(watchId) {
       const el = document.getElementById("hist-" + watchId);
       if (el) el.classList.toggle("open");
+    }
+
+    async function clearHistory(watchId) {
+      if (!confirm("Clear price history for this watch? Tracking re-baselines on the next check.")) return;
+      const resp = await fetch(`/api/watches/${watchId}/history`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      if (resp.ok) {
+        loadAdmin();
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        alert("Error: " + (data.detail || resp.status));
+      }
+    }
+
+    async function clearAllHistory() {
+      if (!confirm("Clear price history for ALL watches? This cannot be undone.")) return;
+      const resp = await fetch(`/api/admin/watches/history`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      if (resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        alert(`Cleared history for ${data.cleared_watches ?? 0} watch(es).`);
+        loadAdmin();
+      } else {
+        const data = await resp.json().catch(() => ({}));
+        alert("Error: " + (data.detail || resp.status));
+      }
     }
 
     async function removeUser(uid, username) {
