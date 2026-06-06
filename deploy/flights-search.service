@@ -1,0 +1,17 @@
+[Unit]
+Description=Flights Search App
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/personal/flight-search
+EnvironmentFile=/root/personal/flight-search/.env
+ExecStart=/root/personal/flight-search/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+StandardOutput=append:/root/personal/flight-search/logs/app.log
+StandardError=append:/root/personal/flight-search/logs/app.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Flights Search uptime watchdog (emails on down/recovery)
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/personal/flight-search
+ExecStart=/root/personal/flight-search/.venv/bin/python /root/personal/flight-search/scripts/watchdog.py
