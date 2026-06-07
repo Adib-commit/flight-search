@@ -115,6 +115,7 @@
         <div class="hist-row">
           <span style="min-width:130px;color:#64748b">${fmtDate(h.checked_at)}</span>
           <span style="min-width:90px">${h.price != null ? "$" + h.price.toFixed(2) : "—"}</span>
+          <span style="min-width:120px;color:#38bdf8">${h.split_price != null ? "split $" + h.split_price.toFixed(2) : ""}</span>
           <span class="${noteClass(h.note)}">${h.note || ""}</span>
           <span style="color:#475569">${(h.carriers || []).join(", ")}</span>
         </div>`).join("");
@@ -135,6 +136,7 @@
           <td>
             ${w.best_price != null ? `<b>$${w.best_price.toFixed(2)}</b>` : "—"}
             ${w.last_price != null && w.last_price !== w.best_price ? `<br><small style="color:#94a3b8">last $${w.last_price.toFixed(2)}</small>` : ""}
+            ${w.best_split_price != null ? `<br><small style="color:#38bdf8">split best $${w.best_split_price.toFixed(2)}</small>` : ""}
           </td>
           <td>${fmtDate(w.last_checked)}</td>
           <td>

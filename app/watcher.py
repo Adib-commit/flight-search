@@ -119,6 +119,8 @@ def clear_history(watch_id: str, user_id: str | None = None) -> bool:
     w["price_history"] = []
     w["best_price"] = None
     w["last_price"] = None
+    w["best_split_price"] = None
+    w["last_split_price"] = None
     _save()
     return True
 
@@ -132,6 +134,8 @@ def clear_all_history(user_id: str | None = None) -> int:
         w["price_history"] = []
         w["best_price"] = None
         w["last_price"] = None
+        w["best_split_price"] = None
+        w["last_split_price"] = None
         n += 1
     if n:
         _save()
@@ -196,80 +200,106 @@ async def _check_watch(watch: dict) -> None:
     booking_url: str = cheapest.booking_url if cheapest else ""
     carriers: list[str] = cheapest.carrier_names if cheapest else []
 
-    # Also evaluate the multi-day split-ticket via the detected hub (e.g. OTP):
-    # 4 direct legs across days can beat the regular fare. Track whichever is
-    # lower so the watcher alerts on the genuinely cheapest option.
+    # Evaluate the multi-day split-ticket via the detected hub (e.g. OTP) and
+    # track it SEPARATELY from the regular round-trip, so a drop in the split
+    # itself alerts even when the regular fare is unchanged (or cheaper).
+    split_price: float | None = None
+    split_booking_url = ""
+    split_carriers: list[str] = []
+    split_via_used: str | None = None
     split_note = ""
     try:
         via = getattr(result, "split_via", None)
         if via:
             split = await run_split_suggestion(req, [], settings, via_override=via)
-            if split and split.legs and (new_price is None or split.total_price < new_price):
+            if split and split.legs:
                 leg_carriers = [
                     (L.options[0].carriers[0] if L.options and L.options[0].carriers else "?")
                     for L in split.legs
                 ]
-                new_price = split.total_price
-                booking_url = (split.legs[0].options[0].booking_url
-                               if split.legs[0].options else "")
-                carriers = [f"split via {via}: " + "/".join(leg_carriers)]
-                split_note = f" [multi-day split via {via}]"
+                split_via_used = via
+                split_price = split.total_price
+                split_booking_url = (split.legs[0].options[0].booking_url
+                                     if split.legs[0].options else "")
+                split_carriers = [f"split via {via}: " + "/".join(leg_carriers)]
+                split_note = f" [multi-day split via {via}: {split_price:.2f}]"
     except Exception as e:
         logger.warning("Watch %s: split check failed: %s", watch["id"], e)
 
-    old_best = watch.get("best_price")  # None = no real baseline yet
+    old_best = watch.get("best_price")        # regular round-trip baseline
+    old_split = watch.get("best_split_price")  # multi-day split baseline
 
     watch["last_checked"] = now
     watch["last_price"] = new_price
+    watch["last_split_price"] = split_price
     entry: dict = {
-        "checked_at": now, "price": new_price,
+        "checked_at": now, "price": new_price, "split_price": split_price,
         "carriers": carriers, "booking_url": booking_url, "note": "check" + split_note,
     }
     watch.setdefault("price_history", []).append(entry)
-    logger.info("WATCH %s result new_price=%s best=%s carriers=%s",
-                watch["id"], new_price, old_best, ",".join(carriers) or "-")
+    logger.info("WATCH %s result regular=%s split=%s best=%s best_split=%s",
+                watch["id"], new_price, split_price, old_best, old_split)
 
-    if new_price is None:
+    notes: list[str] = []
+
+    # ── regular round-trip drop tracking ────────────────────────────────────
+    if new_price is not None:
+        if old_best is None:
+            watch["best_price"] = new_price
+            notes.append("regular first-check baseline")
+        elif new_price < old_best:
+            watch["best_price"] = new_price
+            notes.append(f"regular DROP from {old_best:.2f}")
+            logger.info("Watch %s: regular DROP %.2f → %.2f, emailing %s",
+                        watch["id"], old_best, new_price, watch["email"])
+            _send_drop(settings, watch, new_price, old_best, booking_url, carriers)
+        elif new_price > old_best:
+            notes.append(f"regular rose from best {old_best:.2f}")
+        else:
+            notes.append("regular unchanged")
+
+    # ── multi-day split-ticket drop tracking (independent) ──────────────────
+    if split_price is not None:
+        if old_split is None:
+            watch["best_split_price"] = split_price
+            notes.append(f"split baseline {split_price:.2f}")
+        elif split_price < old_split:
+            watch["best_split_price"] = split_price
+            notes.append(f"split DROP from {old_split:.2f}")
+            logger.info("Watch %s: SPLIT DROP %.2f → %.2f via %s, emailing %s",
+                        watch["id"], old_split, split_price, split_via_used, watch["email"])
+            _send_drop(settings, watch, split_price, old_split, split_booking_url, split_carriers)
+        elif split_price > old_split:
+            notes.append(f"split rose from best {old_split:.2f}")
+        else:
+            notes.append("split unchanged")
+
+    if new_price is None and split_price is None:
         logger.warning("WATCH %s no price this check", watch["id"])
-        _save()
-        return
 
-    if old_best is None:
-        # First real result — record as baseline, no email
-        watch["best_price"] = new_price
-        entry["note"] = "first-check baseline"
-        logger.info("Watch %s: first baseline %.2f", watch["id"], new_price)
-    elif new_price < old_best:
-        entry["note"] = f"DROP from {old_best:.2f}"
-        watch["best_price"] = new_price
-        logger.info("Watch %s: DROP %.2f → %.2f, emailing %s",
-                    watch["id"], old_best, new_price, watch["email"])
-        try:
-            send_price_alert(
-                settings,
-                to_email=watch["email"],
-                origin=watch["origin"],
-                destination=watch["destination"],
-                departure=watch["departure"],
-                ret=watch.get("ret"),
-                new_price=new_price,
-                old_price=old_best,
-                currency=watch["currency"],
-                booking_url=booking_url,
-                carriers=carriers,
-            )
-        except Exception as e:
-            logger.error("Watch %s: price-drop email to %s failed: %s",
-                         watch["id"], watch["email"], e, exc_info=True)
-    elif new_price > old_best:
-        entry["note"] = f"rose from best {old_best:.2f}"
-        logger.info("Watch %s: price rose %.2f → %.2f (best stays %.2f)",
-                    watch["id"], old_best, new_price, old_best)
-    else:
-        entry["note"] = "unchanged"
-
-    entry["note"] += split_note
+    entry["note"] = "; ".join(notes) if notes else "check" + split_note
     _save()
+
+
+def _send_drop(settings, watch, new_price, old_price, booking_url, carriers) -> None:
+    """Send a price-drop email, swallowing/logging any SMTP failure."""
+    try:
+        send_price_alert(
+            settings,
+            to_email=watch["email"],
+            origin=watch["origin"],
+            destination=watch["destination"],
+            departure=watch["departure"],
+            ret=watch.get("ret"),
+            new_price=new_price,
+            old_price=old_price,
+            currency=watch["currency"],
+            booking_url=booking_url,
+            carriers=carriers,
+        )
+    except Exception as e:
+        logger.error("Watch %s: price-drop email to %s failed: %s",
+                     watch["id"], watch["email"], e, exc_info=True)
 
 
 async def _healthcheck() -> None:
