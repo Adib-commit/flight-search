@@ -238,9 +238,12 @@ function renderLeg(segs, label) {
         <span class="seg-date">${fmtDate(s.departure_at)}</span>
         <span class="seg-route">${ori} → ${dst}</span>
         <span class="seg-carrier">${s.carrier_name} ${s.flight_number || ""}</span>
-        <span class="seg-time">${timeOnly(s.departure_at)}–${timeOnly(s.arrival_at)}</span>
+        <span class="seg-time">${s.note ? "⚠ time varies" : `${timeOnly(s.departure_at)}–${timeOnly(s.arrival_at)}`}</span>
         <span class="seg-dur">${fmtH(s.duration_min)} flight</span>
       </div>`;
+    if (s.note) {
+      rows += `<div class="layover-row" style="color:#fbbf24">${s.note}</div>`;
+    }
     if (s.layover_after_min > 0) {
       rows += `<div class="layover-row">⏳ Layover at ${s.destination}: ${fmtH(s.layover_after_min)}</div>`;
     }

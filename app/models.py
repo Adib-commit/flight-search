@@ -59,6 +59,7 @@ class Segment:
     destination_name: str = ""   # e.g. "Cluj International, Cluj-Napoca"
     direction: str = ""          # "outbound" | "inbound"
     layover_after_min: int = 0   # layover to next segment in same direction (0 = last/none)
+    note: str = ""               # display caveat, e.g. day-min fare with unknown exact flight
 
 
 @dataclass
@@ -93,6 +94,7 @@ class SegmentOut(BaseModel):
     duration_min: int
     direction: str = ""
     layover_after_min: int = 0
+    note: str = ""
 
 
 class ItineraryOut(BaseModel):

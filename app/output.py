@@ -36,6 +36,7 @@ def to_out(it: Itinerary) -> ItineraryOut:
                 duration_min=s.duration_min,
                 direction=s.direction,
                 layover_after_min=s.layover_after_min,
+                note=s.note,
             )
             for s in it.segments
         ],

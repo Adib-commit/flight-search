@@ -64,7 +64,7 @@ def _times(flight: dict) -> list[str]:
     return [d] if d else []
 
 
-def _segment(flight: dict, dep_iso: str, direction: str) -> Segment:
+def _segment(flight: dict, dep_iso: str, direction: str, note: str = "") -> Segment:
     origin = flight.get("departureStation", "")
     dest = flight.get("arrivalStation", "")
     dur = _estimate_duration(origin, dest)
@@ -83,7 +83,13 @@ def _segment(flight: dict, dep_iso: str, direction: str) -> Segment:
         duration_min=dur,
         direction=direction,
         layover_after_min=0,
+        note=note,
     )
+
+
+# Caveat shown for every Wizz timetable result: the feed gives only the day's
+# minimum fare, not a per-flight price, so the exact flight/time is unknown.
+_DAY_MIN_NOTE = "cheapest Wizz fare that day — exact flight/time varies, verify on Wizz"
 
 
 def _booking_url(o: str, d: str, dep: str, ret: str | None) -> str:
@@ -122,10 +128,8 @@ def transform_timetable(
         ret_price, _ = _to_target((ret.get("price") or {}).get("amount", 0),
                                   (ret.get("price") or {}).get("currencyCode", ""),
                                   target_currency, eur_usd)
-        out_dep = (_times(out) or [dep_date])[0]
-        ret_dep = (_times(ret) or [ret_date])[0]
-        out_seg = _segment(out, out_dep, "outbound")
-        ret_seg = _segment(ret, ret_dep, "inbound")
+        out_seg = _segment(out, dep_date, "outbound", note=_DAY_MIN_NOTE)
+        ret_seg = _segment(ret, ret_date, "inbound", note=_DAY_MIN_NOTE)
         total = round(out_price + ret_price, 2)
         return [Itinerary(
             id=str(uuid.uuid4())[:12],
@@ -140,20 +144,24 @@ def transform_timetable(
             segments=[out_seg, ret_seg],
         )]
 
-    # One-way: one itinerary per departure time (all at the date's price).
-    itins: list[Itinerary] = []
-    for dep_iso in _times(out) or [dep_date]:
-        seg = _segment(out, dep_iso, "outbound")
-        itins.append(Itinerary(
-            id=str(uuid.uuid4())[:12],
-            price_total=out_price,
-            currency=cur,
-            carriers=[WIZZ_CODE],
-            stops_count=0,
-            max_stops_per_dir=0,
-            total_duration_min=seg.duration_min,
-            layover_min=0,
-            booking_url=book,
-            segments=[seg],
-        ))
-    return itins
+    # One-way: the timetable feed exposes only the DATE MINIMUM price plus the
+    # list of departure times — it does NOT price each flight. Emitting one
+    # itinerary per departure time (all at the min price) tags expensive flights
+    # with the cheap fare (e.g. a 09:20 flight shown at the 16:45 price). So emit
+    # a SINGLE cheapest-of-day itinerary. The price is honest as the day's lowest
+    # Wizz fare; the booking_url lands on Wizz's day page for the exact flight.
+    # Use a date-only departure (no clock time) so the UI never asserts a
+    # specific flight time the timetable cannot back up; it shows the note.
+    seg = _segment(out, dep_date, "outbound", note=_DAY_MIN_NOTE)
+    return [Itinerary(
+        id=str(uuid.uuid4())[:12],
+        price_total=out_price,
+        currency=cur,
+        carriers=[WIZZ_CODE],
+        stops_count=0,
+        max_stops_per_dir=0,
+        total_duration_min=seg.duration_min,
+        layover_min=0,
+        booking_url=book,
+        segments=[seg],
+    )]
