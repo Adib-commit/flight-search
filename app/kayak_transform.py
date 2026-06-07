@@ -68,6 +68,7 @@ def transform_result(result: dict, legs_dict: dict, segs_dict: dict, airports: d
     total_duration = 0
     total_layover = 0
     stops_per_dir: list[int] = []
+    has_ground = False   # bus/train segment present -> not a flight, drop it
 
     for dir_idx, leg_ref in enumerate(leg_refs):
         direction = "outbound" if dir_idx == 0 else "inbound"
@@ -99,6 +100,11 @@ def transform_result(result: dict, legs_dict: dict, segs_dict: dict, airports: d
                 layover_min = 0
 
             seg_data = segs_dict.get(seg_id) or {}
+            # Kayak mixes ground transport (bus/train) into "flight" results,
+            # flagged by isBus / equipmentTypeName "Bus". A bus leg is not a
+            # flight — mark the whole itinerary for removal.
+            if seg_data.get("isBus") or str(seg_data.get("equipmentTypeName") or "").strip().lower() in ("bus", "train"):
+                has_ground = True
             carrier = seg_data.get("airline") or ""
             if carrier and carrier not in carriers:
                 carriers.append(carrier)
@@ -125,6 +131,10 @@ def transform_result(result: dict, legs_dict: dict, segs_dict: dict, airports: d
         # if leg duration not provided, sum flight durations
         if leg_duration == 0:
             total_duration += flight_min
+
+    # Reject the whole itinerary if any leg is ground transport (bus/train).
+    if has_ground:
+        return None
 
     total_stops = sum(stops_per_dir)
     max_stops = max(stops_per_dir) if stops_per_dir else total_stops
