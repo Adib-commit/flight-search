@@ -452,13 +452,11 @@ async def _split_for_one_via(
     dep: date = req.flight_dates.departure
     ret: date | None = req.flight_dates.ret
 
-    # KiwiRapid + Kayak give regional direct coverage (e.g. Kayak has direct
-    # OTP→CLJ that Kiwi lacks) plus Wizz direct LCC fares (TLV↔OTP). Skyscanner
-    # is included for fare reconciliation — its per-leg timeout is capped at 30 s
-    # (down from 45 s) so it doesn't block the overall split budget.
+    # For split legs we use Kiwi+Kayak+Skyscanner only.
+    # Wizz timetable API returns 503 for direct server-to-server calls
+    # (Akamai bot-protection). Kiwi and Kayak both index Wizz flights,
+    # so Wizz fares are still covered without the 503 failures.
     leg_providers = [KiwiRapidProvider(settings), KayakProvider(settings), SkyscannerProvider(settings)]
-    if settings.wizz_enabled:
-        leg_providers.append(WizzProvider(settings))
     fast_provider = MultiProvider(leg_providers)
 
     async def _one_leg(orig: str, dest: str, d: date, _attempt: int = 0) -> StopoverLegResult:

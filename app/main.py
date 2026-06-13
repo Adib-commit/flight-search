@@ -300,26 +300,52 @@ async def search_stopover(req: StopoverRequest) -> StopoverResponse:
         raise HTTPException(status_code=502, detail=str(e))
 
 
+import uuid
+
+# ── split-suggestion task store ───────────────────────────────────────────────
+# Tasks run in the background; the frontend polls until done.
+# Simple in-process dict is fine — split tasks complete in <90s, server
+# restarts clear them, and we never need persistence across restarts.
+_split_tasks: dict[str, dict] = {}   # task_id → {"status": "pending"|"done"|"error", "result": ...}
+
+
 class SplitSuggestionRequest(BaseModel):
     search: SearchRequest
     via: str   # detected via airport (e.g. "OTP")
 
 
-@app.post("/api/search/split-suggestion", response_model=StopoverResponse | None)
-async def search_split_suggestion(req: SplitSuggestionRequest):
-    """Agent-built multi-day split suggestion: called async by frontend after main search.
-    Hard-capped at 55 s so the browser connection never times out."""
-    settings = get_settings()
+async def _run_split_task(task_id: str, req: SplitSuggestionRequest, settings) -> None:
+    """Background coroutine: runs split search and stores result in _split_tasks."""
     try:
-        result = await asyncio.wait_for(
-            run_split_suggestion(req.search, req.via, settings),
-            timeout=55,
-        )
-        return result
-    except asyncio.TimeoutError:
-        return None
-    except Exception:
-        return None
+        result = await run_split_suggestion(req.search, req.via, settings)
+        _split_tasks[task_id] = {"status": "done", "result": result}
+    except Exception as exc:
+        logging.getLogger(__name__).warning("split task %s failed: %s", task_id, exc)
+        _split_tasks[task_id] = {"status": "error", "result": None}
+
+
+@app.post("/api/search/split-suggestion")
+async def search_split_suggestion(req: SplitSuggestionRequest, background_tasks: BackgroundTasks):
+    """Start an async split-suggestion search. Returns a task_id immediately.
+    The frontend polls GET /api/search/split-task/{task_id} for the result.
+    This avoids browser connection timeouts regardless of search duration."""
+    settings = get_settings()
+    task_id = uuid.uuid4().hex
+    _split_tasks[task_id] = {"status": "pending", "result": None}
+    background_tasks.add_task(_run_split_task, task_id, req, settings)
+    return {"task_id": task_id}
+
+
+@app.get("/api/search/split-task/{task_id}")
+async def get_split_task(task_id: str):
+    """Poll for split-suggestion result. Returns status + result when done."""
+    task = _split_tasks.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    # Clean up completed tasks after retrieval to avoid unbounded memory growth
+    if task["status"] in ("done", "error"):
+        _split_tasks.pop(task_id, None)
+    return task
 
 
 # ── watches ───────────────────────────────────────────────────────────────────

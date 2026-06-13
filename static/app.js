@@ -720,38 +720,55 @@ async function _fetchSplitSuggestion(searchPayload, via, cheapestRegular, regula
   const area = document.getElementById("split-suggestion-area");
   if (!area) return;
   try {
-    const splitAbort = new AbortController();
-    const splitTimer = setTimeout(() => splitAbort.abort(), 60000); // 60 s hard limit
-    const resp = await fetch("/api/search/split-suggestion", {
+    // Step 1: kick off background task — returns immediately with a task_id
+    const startResp = await fetch("/api/search/split-suggestion", {
       method: "POST",
       headers: authHeaders(),
       body: JSON.stringify({ search: searchPayload, via }),
-      signal: splitAbort.signal,
     });
-    clearTimeout(splitTimer);
-    const split = resp.ok ? await resp.json() : null;
-    // Honour the budget: a split that exceeds max price isn't a valid offer.
+    if (!startResp.ok) throw new Error(`Split start failed: ${startResp.status}`);
+    const { task_id } = await startResp.json();
+
+    // Step 2: poll until done (max 120 s, every 4 s)
+    const MAX_POLLS = 30;
+    let split = null;
+    for (let i = 0; i < MAX_POLLS; i++) {
+      await new Promise(r => setTimeout(r, 4000));
+      const pollResp = await fetch(`/api/search/split-task/${task_id}`, { headers: authHeaders() });
+      if (!pollResp.ok) break;
+      const task = await pollResp.json();
+      if (task.status === "done") { split = task.result; break; }
+      if (task.status === "error") break;
+      // still pending — update the spinner text so the user sees progress
+      const spin = document.getElementById("split-suggestion-area");
+      if (spin) spin.querySelector && (spin.querySelector("p") || {}).textContent &&
+        (spin.querySelector("p").textContent = `Searching split routes… (${(i+1)*4}s)`);
+    }
+
+    // Step 3: render result (same logic as before)
     if (split && split.legs && split.legs.length && maxPrice && split.total_price > maxPrice) {
-      area.outerHTML = `<div class="card split-card"><p class="split-desc">No split-ticket under your $${maxPrice.toFixed(0)} budget across any hub: cheapest multi-day combo found is $${split.total_price.toFixed(2)}.</p></div>`;
+      const a = document.getElementById("split-suggestion-area");
+      if (a) a.outerHTML = `<div class="card split-card"><p class="split-desc">No split-ticket under your $${maxPrice.toFixed(0)} budget across any hub: cheapest multi-day combo found is $${split.total_price.toFixed(2)}.</p></div>`;
       return;
     }
     const cheaper = !cheapestRegular || cheapestRegular <= 0 || (split && split.total_price < cheapestRegular);
     if (split && split.legs && split.legs.length && cheaper) {
       const newHtml = renderSplitSuggestion(split, cheapestRegular);
-      const area = document.getElementById("split-suggestion-area");
-      if (area) area.outerHTML = newHtml;
+      const a = document.getElementById("split-suggestion-area");
+      if (a) a.outerHTML = newHtml;
       _injectSplitIntoChart(split, cheapestRegular, regularOptions);
     } else if (split && split.legs && split.legs.length) {
-      // Found a split but it is NOT cheaper than the regular round-trip — do not
-      // promote it; the split feature exists to surface CHEAPER multi-day combos.
       const winningHub = split.legs[0]?.label?.split("→")[1]?.trim() || via;
-      area.outerHTML = `<div class="card split-card"><p class="split-desc">No cheaper split-ticket found (best hub: <b>${winningHub}</b>, $${split.total_price.toFixed(2)}) vs regular cheapest $${cheapestRegular.toFixed(2)}.</p></div>`;
+      const a = document.getElementById("split-suggestion-area");
+      if (a) a.outerHTML = `<div class="card split-card"><p class="split-desc">No cheaper split-ticket found (best hub: <b>${winningHub}</b>, $${split.total_price.toFixed(2)}) vs regular cheapest $${cheapestRegular.toFixed(2)}.</p></div>`;
     } else {
-      area.outerHTML = `<div class="card split-card"><p class="split-desc">No split-ticket found via any hub for these dates.</p></div>`;
+      const a = document.getElementById("split-suggestion-area");
+      if (a) a.outerHTML = `<div class="card split-card"><p class="split-desc">No split-ticket found via any hub for these dates.</p></div>`;
     }
   } catch (e) {
     console.error("split-suggestion error:", e);
-    if (area) area.outerHTML = `<div class="card split-card"><p class="split-desc error">Split suggestion failed: ${e.message}</p></div>`;
+    const a = document.getElementById("split-suggestion-area");
+    if (a) a.outerHTML = `<div class="card split-card"><p class="split-desc error">Split suggestion failed: ${e.message}</p></div>`;
   }
 }
 
