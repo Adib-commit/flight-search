@@ -547,7 +547,11 @@ function render(data) {
   if (data.split_via) {
     html += `<div id="split-suggestion-area" class="card" style="border:2px solid #0e7490">
       <h3>💡 Agent-built Multi-day Split-ticket &nbsp;<span style="color:#38bdf8;font-size:.9rem">via ${data.split_via}</span></h3>
-      <p class="sub"><span class="loading">⏳ Searching each leg independently… this takes ~30-60s</span></p>
+      <p class="sub" id="split-progress-label">⏳ Searching each leg independently across all hubs…</p>
+      <div style="background:#0f1f35;border-radius:6px;height:8px;margin:.5rem 0;overflow:hidden">
+        <div id="split-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#0e7490,#38bdf8);border-radius:6px;transition:width .5s ease"></div>
+      </div>
+      <p style="color:#64748b;font-size:.78rem;margin:0">This may take up to 90s — results appear automatically</p>
     </div>`;
   }
   html += `<p class="badge">${data.total_considered} itineraries considered · times shown in hours</p>`;
@@ -734,16 +738,22 @@ async function _fetchSplitSuggestion(searchPayload, via, cheapestRegular, regula
     let split = null;
     for (let i = 0; i < MAX_POLLS; i++) {
       await new Promise(r => setTimeout(r, 4000));
+      // Update progress bar: estimated 90s total → each 4s tick = ~4.4%
+      const pct = Math.min(95, Math.round(((i + 1) / MAX_POLLS) * 100));
+      const bar = document.getElementById("split-progress-bar");
+      const label = document.getElementById("split-progress-label");
+      if (bar) bar.style.width = pct + "%";
+      if (label) label.textContent = `⏳ Searching split routes… ${(i + 1) * 4}s`;
       const pollResp = await fetch(`/api/search/split-task/${task_id}`, { headers: authHeaders() });
       if (!pollResp.ok) break;
       const task = await pollResp.json();
       if (task.status === "done") { split = task.result; break; }
       if (task.status === "error") break;
-      // still pending — update the spinner text so the user sees progress
-      const spin = document.getElementById("split-suggestion-area");
-      if (spin) spin.querySelector && (spin.querySelector("p") || {}).textContent &&
-        (spin.querySelector("p").textContent = `Searching split routes… (${(i+1)*4}s)`);
     }
+
+    // Fill bar to 100% before rendering
+    const bar = document.getElementById("split-progress-bar");
+    if (bar) bar.style.width = "100%";
 
     // Step 3: render result (same logic as before)
     if (split && split.legs && split.legs.length && maxPrice && split.total_price > maxPrice) {
