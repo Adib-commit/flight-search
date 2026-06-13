@@ -216,6 +216,7 @@ async def _check_watch(watch: dict) -> None:
     try:
         via = getattr(result, "split_via", None) or "OTP"
         if True:  # always attempt split; via defaults to OTP if not detected
+            await asyncio.sleep(8)  # brief cooldown so Kiwi/Kayak rate-limits recover
             async with _SPLIT_SEM:  # serialize split searches — one at a time
                 split = await run_split_suggestion(req, via, settings)
             if split and split.legs:
