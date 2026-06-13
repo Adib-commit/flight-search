@@ -728,7 +728,7 @@ async function _fetchSplitSuggestion(searchPayload, via, cheapestRegular, regula
     const split = resp.ok ? await resp.json() : null;
     // Honour the budget: a split that exceeds max price isn't a valid offer.
     if (split && split.legs && split.legs.length && maxPrice && split.total_price > maxPrice) {
-      area.outerHTML = `<div class="card split-card"><p class="split-desc">No split-ticket via <b>${via}</b> under your $${maxPrice.toFixed(0)} budget: cheapest multi-day combo is $${split.total_price.toFixed(2)}.</p></div>`;
+      area.outerHTML = `<div class="card split-card"><p class="split-desc">No split-ticket under your $${maxPrice.toFixed(0)} budget across any hub: cheapest multi-day combo found is $${split.total_price.toFixed(2)}.</p></div>`;
       return;
     }
     const cheaper = !cheapestRegular || cheapestRegular <= 0 || (split && split.total_price < cheapestRegular);
@@ -740,9 +740,10 @@ async function _fetchSplitSuggestion(searchPayload, via, cheapestRegular, regula
     } else if (split && split.legs && split.legs.length) {
       // Found a split but it is NOT cheaper than the regular round-trip — do not
       // promote it; the split feature exists to surface CHEAPER multi-day combos.
-      area.outerHTML = `<div class="card split-card"><p class="split-desc">No cheaper split-ticket via <b>${via}</b>: best multi-day combo is $${split.total_price.toFixed(2)} vs regular cheapest $${cheapestRegular.toFixed(2)}.</p></div>`;
+      const winningHub = split.legs[0]?.label?.split("→")[1]?.trim() || via;
+      area.outerHTML = `<div class="card split-card"><p class="split-desc">No cheaper split-ticket found (best hub: <b>${winningHub}</b>, $${split.total_price.toFixed(2)}) vs regular cheapest $${cheapestRegular.toFixed(2)}.</p></div>`;
     } else {
-      area.outerHTML = `<div class="card split-card"><p class="split-desc">No cheaper split-ticket found via <b>${via}</b> for these dates.</p></div>`;
+      area.outerHTML = `<div class="card split-card"><p class="split-desc">No split-ticket found via any hub for these dates.</p></div>`;
     }
   } catch (e) {
     console.error("split-suggestion error:", e);

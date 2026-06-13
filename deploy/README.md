@@ -1,5 +1,3 @@
-# Deployment (systemd)
-
 Copy the units to `/etc/systemd/system/`, then reload + enable:
 
 ```bash

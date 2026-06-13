@@ -277,56 +277,122 @@ async def run_search(req: SearchRequest, settings: Settings, fast: bool = False)
     return response
 
 
-def _find_via_airport(itineraries: list[Itinerary]) -> str | None:
-    """Return the most common intermediate airport from multi-stop outbound legs."""
+# ── known LCC hub airports ────────────────────────────────────────────────────
+# These are tried as via-airports even when providers do NOT surface them in
+# the regular search results.  Example: Wizz flies TLV→NAP direct AND
+# NAP→CLJ direct, but a TLV→CLJ search via Kiwi/Kayak/Skyscanner will
+# usually only return OTP-routed itineraries, so NAP never reaches the top of
+# the frequency counter — yet it may be the cheaper/faster split hub.
+_KNOWN_LCC_HUBS: list[str] = [
+    "OTP",  # Bucharest Henri Coandă   – primary Wizz TLV hub
+    "NAP",  # Naples Capodichino       – Wizz TLV→NAP direct
+    "KTW",  # Katowice                 – Wizz base
+    "VIE",  # Vienna                   – Wizz + Austrian hub
+    "WAW",  # Warsaw Chopin            – LOT + Wizz
+    "BUD",  # Budapest                 – Wizz HQ hub
+    "SOF",  # Sofia                    – Wizz hub
+    "FCO",  # Rome Fiumicino           – multi-carrier
+    "ATH",  # Athens                   – Aegean / Wizz
+    "IST",  # Istanbul                 – Turkish Airlines hub
+]
+
+# Maximum number of via-hub candidates to probe in parallel.  Each candidate
+# spawns 4 leg-searches × N providers, so keep this modest.
+_MAX_VIA_CANDIDATES = 6
+
+
+def _find_via_airports(itineraries: list[Itinerary], n: int = 3) -> list[str]:
+    """Return up to n most-common intermediate hubs from provider results, then
+    pad with _KNOWN_LCC_HUBS so NAP / BUD / etc. are always tried even when
+    the aggregators don't surface them."""
     counter: Counter = Counter()
     for it in itineraries:
         out_segs = [s for s in it.segments if s.direction in ("outbound", "")]
         if len(out_segs) >= 2:
             for seg in out_segs[:-1]:
                 counter[seg.destination] += 1
-    if not counter:
-        return None
-    via, _count = counter.most_common(1)[0]
-    return via
+    top = [via for via, _ in counter.most_common(n)]
+    for hub in _KNOWN_LCC_HUBS:
+        if hub not in top:
+            top.append(hub)
+    return top[:_MAX_VIA_CANDIDATES]
+
+
+def _find_via_airport(itineraries: list[Itinerary]) -> str | None:
+    """Return the single most-common result-derived hub (used for the UI hint label)."""
+    counter: Counter = Counter()
+    for it in itineraries:
+        out_segs = [s for s in it.segments if s.direction in ("outbound", "")]
+        if len(out_segs) >= 2:
+            for seg in out_segs[:-1]:
+                counter[seg.destination] += 1
+    if counter:
+        return counter.most_common(1)[0][0]
+    # Fall back to first known hub when results have no multi-stop itineraries
+    return _KNOWN_LCC_HUBS[0] if _KNOWN_LCC_HUBS else None
 
 
 async def run_split_suggestion(req: SearchRequest, via: str, settings: Settings) -> StopoverResponse | None:
-    """Public entry point: build a multi-day split suggestion for the given via airport.
-    Called from a separate endpoint so it doesn't block the main search response."""
-    return await _auto_split_suggestion(req, [], settings, via_override=via)
+    """Try the caller-supplied hub PLUS all other known LCC hubs in parallel.
+    Returns the best-value (cheapest total price) split found across all candidates.
+    This ensures e.g. NAP is always evaluated even when only OTP appeared in the
+    regular search results."""
+    origin = req.origin.strip().upper()
+    destination = req.destination.strip().upper()
+    # Build candidate list: supplied via first, then remaining known hubs.
+    # Drop origin / destination themselves — they can't be intermediate hubs.
+    candidates: list[str] = [via]
+    for hub in _KNOWN_LCC_HUBS:
+        if hub not in candidates and hub not in (origin, destination):
+            candidates.append(hub)
+    candidates = candidates[:_MAX_VIA_CANDIDATES]
+
+    logger.info("SPLIT trying %d hub candidates: %s", len(candidates), ", ".join(candidates))
+    tasks = [asyncio.create_task(_split_for_one_via(req, c, settings)) for c in candidates]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    best: StopoverResponse | None = None
+    best_total = float("inf")
+    for candidate, result in zip(candidates, results):
+        if isinstance(result, Exception) or result is None:
+            continue
+        logger.info("SPLIT hub=%s total=%.2f", candidate, result.total_price)
+        if result.total_price < best_total:
+            best_total = result.total_price
+            best = result
+    if best:
+        logger.info("SPLIT best hub total=%.2f", best.total_price)
+    return best
 
 
-async def _auto_split_suggestion(
-    req: SearchRequest, itineraries: list[Itinerary], settings: Settings,
-    via_override: str | None = None,
+async def _split_for_one_via(
+    req: SearchRequest, via: str, settings: Settings,
 ) -> StopoverResponse | None:
-    """Build multi-day split-ticket suggestion entirely in the agent.
+    """Build multi-day split-ticket suggestion for a SINGLE via airport.
 
     The agent itself constructs the legs — the APIs are NOT asked for split
     tickets. We:
-      1. Find the most common via-airport from the search results (e.g. OTP)
+      1. Use the provided via-airport (e.g. OTP or NAP)
       2. Build 4 independent one-way legs with different dates
       3. Search each leg as a DIRECT flight (the via hub is the one allowed
          stop per direction — broken legs must not add their own stops)
-      4. Return the cheapest combination
+      4. Return the cheapest chronologically-valid combination
 
     Only offered when the customer allows ≥1 connection per direction.
 
     Date strategy (round trip):
-      - Leg 1: origin → via   on departure_date        (e.g. TLV→OTP Aug 4)
+      - Leg 1: origin → via   on departure_date        (e.g. TLV→NAP Aug 4)
       - Leg 2: via → dest     on departure_date+N       (try N=1,2,3)
       - Leg 3: dest → via     on return_date-M          (try M=1,2)
-      - Leg 4: via → origin   on return_date            (e.g. OTP→TLV Aug 11)
+      - Leg 4: via → origin   on return_date            (e.g. NAP→TLV Aug 11)
     """
     # A split via one hub adds exactly one stop per direction (you change
     # planes at the via airport). So it's only valid when the customer allows
     # ≥1 connection. If they asked for direct-only (max_connections == 0), a
-    # split through OTP would violate that — don't offer it.
+    # split through a hub would violate that — don't offer it.
     if req.max_connections is not None and req.max_connections < 1:
         return None
 
-    via = via_override or _find_via_airport(itineraries)
     if not via:
         return None
 
