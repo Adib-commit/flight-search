@@ -24,6 +24,11 @@ _STORE_PATH = _DATA_DIR / "watches.json"
 _watches: dict[str, dict[str, Any]] = {}
 scheduler = AsyncIOScheduler()
 
+# Only one split search runs at a time across all watches.
+# Without this, 4 concurrent watches each fire 90 provider calls = 360 total,
+# hitting Kiwi/Kayak rate limits and returning 0 for every split leg.
+_SPLIT_SEM = asyncio.Semaphore(1)
+
 
 # ── persistence ───────────────────────────────────────────────────────────────
 
@@ -211,7 +216,8 @@ async def _check_watch(watch: dict) -> None:
     try:
         via = getattr(result, "split_via", None) or "OTP"
         if True:  # always attempt split; via defaults to OTP if not detected
-            split = await run_split_suggestion(req, via, settings)
+            async with _SPLIT_SEM:  # serialize split searches — one at a time
+                split = await run_split_suggestion(req, via, settings)
             if split and split.legs:
                 leg_carriers = [
                     (L.options[0].carriers[0] if L.options and L.options[0].carriers else "?")
