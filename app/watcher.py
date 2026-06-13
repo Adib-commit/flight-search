@@ -209,9 +209,9 @@ async def _check_watch(watch: dict) -> None:
     split_via_used: str | None = None
     split_note = ""
     try:
-        via = getattr(result, "split_via", None)
-        if via:
-            split = await run_split_suggestion(req, [], settings, via_override=via)
+        via = getattr(result, "split_via", None) or "OTP"
+        if True:  # always attempt split; via defaults to OTP if not detected
+            split = await run_split_suggestion(req, via, settings)
             if split and split.legs:
                 leg_carriers = [
                     (L.options[0].carriers[0] if L.options and L.options[0].carriers else "?")

@@ -22,10 +22,11 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Wizz rate-limits bursts of timetable calls. The multi-day split fires many
-# legs at once, so cap concurrency and retry 429 with a short backoff.
-_WIZZ_SEM = asyncio.Semaphore(1)
+# Wizz rate-limits bursts of timetable calls.  The semaphore is now per-instance
+# so that parallel split-hub searches don't all queue through a single slot.
+# Each WizzProvider (= one hub candidate) gets its own 2-slot semaphore.
 _MAX_429_RETRIES = 3
+_WIZZ_SEM_SLOTS = 6   # concurrent calls per provider instance; 6 fits ~12 legs in 2 batches ≤45s
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -45,6 +46,7 @@ class WizzClient:
     def __init__(self, settings):
         self._s = settings
         self._version: str | None = None
+        self._sem = asyncio.Semaphore(_WIZZ_SEM_SLOTS)
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -111,7 +113,7 @@ class WizzClient:
             })
 
         empty = {"outboundFlights": [], "returnFlights": []}
-        async with _WIZZ_SEM:
+        async with self._sem:
             async with httpx.AsyncClient(timeout=20) as client:
                 version = await self._get_version(client)
                 resp = await self._timetable(client, version, flight_list)
