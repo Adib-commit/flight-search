@@ -5,6 +5,7 @@ stay source-agnostic. Choose via Settings.provider ("kiwi" or "amadeus").
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Protocol
 
 from .amadeus_client import AmadeusClient
@@ -74,6 +75,13 @@ class RapidApiProvider:
         return itins
 
 
+# Caps concurrent Kiwi/RapidAPI calls across the whole process. The parallel split
+# search fans out ~60 leg calls (hubs × legs); without a cap RapidAPI returns 429.
+# A Semaphore (NOT a serializing Lock like Kayak's) allows real concurrency while
+# bounding the burst: ~60 / 8 × 1.5s ≈ 12s.
+_KIWI_SEMAPHORE = asyncio.Semaphore(8)
+
+
 class KiwiRapidProvider:
     """Kiwi.com Cheap Flights via RapidAPI — real LCC + self-transfer fares."""
 
@@ -82,7 +90,8 @@ class KiwiRapidProvider:
         self._currency = settings.currency
 
     async def search(self, **kw) -> list[Itinerary]:
-        items = await self._client.search(**kw)
+        async with _KIWI_SEMAPHORE:
+            items = await self._client.search(**kw)
         return transform_kiwi_rapid(items, self._currency.upper())
 
 
@@ -143,8 +152,15 @@ class WizzProvider:
 class MultiProvider:
     """Run multiple providers in parallel and merge results."""
 
-    def __init__(self, providers: list):
+    def __init__(self, providers: list, provider_timeout: float | None = None):
         self._providers = providers
+        # Per-provider wall-clock cap. When set, each provider.search is wrapped in
+        # its own wait_for so one slow provider (e.g. Kayak queued behind its global
+        # lock) can NEVER cancel the siblings or hang the leg — it just times out,
+        # is caught by the return_exceptions gather, and the fast providers' results
+        # are still merged. Without this, an outer wait_for around the whole
+        # MultiProvider would cancel already-returned Kiwi/Skyscanner results too.
+        self._provider_timeout = provider_timeout
 
     async def search(self, **kw) -> list[Itinerary]:
         import asyncio
@@ -152,20 +168,34 @@ class MultiProvider:
         import time
         log = logging.getLogger(__name__)
 
+        timeout = self._provider_timeout
+
+        async def _call(provider, **kw) -> list[Itinerary]:
+            if timeout is None:
+                return await provider.search(**kw)
+            return await asyncio.wait_for(provider.search(**kw), timeout=timeout)
+
         async def _fetch_with_retry(provider, **kw) -> list[Itinerary]:
-            """One retry after 2 s for transient failures."""
+            """One retry after 2 s for transient failures.
+
+            A TimeoutError is NOT retried: the provider is already slow, so a second
+            bounded attempt only burns more wall-clock for marginal gain. Let it
+            drop out and keep the fast providers' results."""
             name = type(provider).__name__
             t0 = time.monotonic()
             try:
-                out = await provider.search(**kw)
+                out = await _call(provider, **kw)
                 log.info("PERF provider=%s returned=%d in %.2fs", name, len(out), time.monotonic() - t0)
                 return out
+            except asyncio.TimeoutError:
+                log.warning("%s timed out after %.2fs (cap=%ss) — skipping", name, time.monotonic() - t0, timeout)
+                raise
             except Exception as e:
                 log.warning("%s failed (attempt 1) after %.2fs: %s — retrying in 2 s", name, time.monotonic() - t0, e)
                 await asyncio.sleep(2)
                 t1 = time.monotonic()
                 try:
-                    out = await provider.search(**kw)
+                    out = await _call(provider, **kw)
                     log.info("PERF provider=%s returned=%d in %.2fs (retry)", name, len(out), time.monotonic() - t1)
                     return out
                 except Exception as e2:

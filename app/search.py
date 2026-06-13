@@ -398,14 +398,23 @@ async def run_split_suggestion(req: SearchRequest, via: str, settings: Settings)
             candidates.append(h)
     candidates = candidates[:_MAX_VIA_CANDIDATES]
 
-    logger.info("SPLIT trying %d hub candidates: %s", len(candidates), ", ".join(candidates))
+    logger.info("SPLIT trying %d hub candidates (parallel): %s", len(candidates), ", ".join(candidates))
+    # Probe all hubs in parallel and keep the CHEAPEST valid result. Each leg now
+    # self-bounds (MultiProvider provider_timeout=8) and Kiwi requests are capped by
+    # a Semaphore, so the old rate-limit storm that made parallel unusable is gone.
+    # Sequential probing wasted ~60s on a dead first hub (e.g. OTP→None) before
+    # reaching the real one (NAP) — landing past the frontend's 120s poll budget.
     tasks = [asyncio.create_task(_split_for_one_via(req, c, settings)) for c in candidates]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     best: StopoverResponse | None = None
     best_total = float("inf")
     for candidate, result in zip(candidates, results):
-        if isinstance(result, Exception) or result is None:
+        if isinstance(result, Exception):
+            logger.warning("SPLIT hub=%s exception: %s", candidate, result)
+            continue
+        if result is None:
+            logger.info("SPLIT hub=%s returned None", candidate)
             continue
         logger.info("SPLIT hub=%s total=%.2f", candidate, result.total_price)
         if result.total_price < best_total:
@@ -457,7 +466,11 @@ async def _split_for_one_via(
     # (Akamai bot-protection). Kiwi and Kayak both index Wizz flights,
     # so Wizz fares are still covered without the 503 failures.
     leg_providers = [KiwiRapidProvider(settings), KayakProvider(settings), SkyscannerProvider(settings)]
-    fast_provider = MultiProvider(leg_providers)
+    # provider_timeout=8: Kiwi+Skyscanner (~1.5s, no global lock) carry the leg;
+    # Kayak (serialized behind its process-global _KAYAK_LOCK) contributes when its
+    # queue is short and silently drops out at 8s when not — it can no longer null
+    # the leg by stalling the whole MultiProvider past the outer wait_for.
+    fast_provider = MultiProvider(leg_providers, provider_timeout=8)
 
     async def _one_leg(orig: str, dest: str, d: date, _attempt: int = 0) -> StopoverLegResult:
         label = f"{orig} → {dest}"
@@ -466,14 +479,17 @@ async def _split_for_one_via(
                 fast_provider.search(
                     origin=orig, destination=dest,
                     departure_date=d.isoformat(), return_date=None,
-                    adults=1, non_stop=True,    # split legs must be DIRECT — the
-                                                # via hub (e.g. OTP) is itself the
-                                                # one allowed stop per direction,
-                                                # so a broken leg must add none.
+                    adults=1, non_stop=False,   # Use local stops_count==0 filter below.
+                                                # Kiwi's maxStopsCount=0 API param drops
+                                                # valid direct Wizz flights from results.
+                                                # Passing False fetches all then we keep
+                                                # only stops_count==0 itineraries.
                     included_airlines=None, excluded_airlines=None,
                     currency=settings.currency,
                 ),
-                timeout=30,   # 30 s per leg keeps 3-hub×5-leg total under 55 s
+                timeout=15,   # legs now ~2s (Kiwi/Sky); 15s covers the one retry.
+                              # Each provider self-bounds at provider_timeout=8, so
+                              # this outer cap no longer cancels fast results.
             )
             # Enforce direct: providers don't all honor non_stop, so drop any leg
             # itinerary that has its own stops. A split = 4 direct hops via OTP.

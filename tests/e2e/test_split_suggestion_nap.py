@@ -225,3 +225,43 @@ def test_split_suggestion_price_in_plausible_range():
         f"Total price {resp.total_price} {resp.currency} is outside the plausible "
         "range $50–$2000. Check currency conversion or pax-count multiplication."
     )
+
+
+# ---------------------------------------------------------------------------
+# Wall-clock guard: the search must finish well inside the frontend's 120s poll
+# budget (app.js MAX_POLLS=30 × 4s). The original bug returned a valid result
+# only AFTER ~120s (sequential hubs), so the UI had already given up. This guard
+# fails loudly on any sequential/timeout regression.
+# ---------------------------------------------------------------------------
+
+@needs_key
+def test_split_suggestion_completes_within_budget():
+    """run_split_suggestion must return inside the 120s frontend poll budget.
+
+    Asserts < 90s to leave margin: the parallel-hub + per-provider-timeout design
+    should land in ~10-30s. A 120s+ result means the user sees
+    'No split-ticket found via any hub' even though a route exists."""
+    import time as _time
+    t0 = _time.monotonic()
+    resp = asyncio.run(run_split_suggestion(_split_request(), via="", settings=settings))
+    elapsed = _time.monotonic() - t0
+    assert resp is not None, "No split result."
+    assert elapsed < 90, (
+        f"Split search took {elapsed:.1f}s — exceeds the frontend's 120s poll "
+        "budget margin. Check hubs run in parallel and legs self-bound "
+        "(MultiProvider provider_timeout)."
+    )
+
+
+@needs_key
+def test_split_suggestion_via_otp_yields_result():
+    """OTP must yield a valid split on its own — it is the hub the regular
+    connected search routes through, and the explicit case in CLAUDE.md. A None
+    here means the leg search is dropping OTP's direct flights."""
+    resp = asyncio.run(run_split_suggestion(_split_request(), via="OTP", settings=settings))
+    assert resp is not None, (
+        "Split via OTP returned None. OTP is the canonical multi-day hub "
+        "(TLV→OTP→CLJ→OTP→TLV) — check leg search isn't being cancelled by a slow "
+        "provider before Kiwi's OTP directs return."
+    )
+    assert resp.total_price > 0 and len(resp.legs) == 4
