@@ -367,9 +367,15 @@ async def run_split_suggestion(req: SearchRequest, via: str, settings: Settings)
     except Exception:
         from_origin, to_dest = [], []
 
-    # Step 3: intersection = airports reachable from origin AND that reach dest
-    real_hubs = [a for a in from_origin if a in set(to_dest)
-                 and a not in (origin, destination)]
+    # Step 3: intersection = airports reachable from origin AND that reach dest.
+    # Sort by _KNOWN_LCC_HUBS priority so OTP/NAP/BUD beat obscure airports
+    # like CTA or HER before the candidate cap cuts in.
+    to_dest_set = set(to_dest)
+    hub_priority = {h: i for i, h in enumerate(_KNOWN_LCC_HUBS)}
+    real_hubs = sorted(
+        [a for a in from_origin if a in to_dest_set and a not in (origin, destination)],
+        key=lambda a: hub_priority.get(a, 999),
+    )
     logger.info(
         "SPLIT route-map: from %s → %d airports; to %s ← %d airports; "
         "intersection=%s",
@@ -504,51 +510,51 @@ async def _split_for_one_via(
             return StopoverLegResult(label=label, date=d.isoformat(), options=[], cheapest_price=0.0, currency=settings.currency, error=str(exc)[:80])
 
     if ret:
-        # Try a focused set of offsets: fwd 1-3 days after dep, back 1-2 days
-        # before ret. This covers the common "fly in a day early, leave a day
-        # late" patterns without exploding to 30 combos × 6 hubs × 4 providers.
-        # Unique leg-2 dates: 3; unique leg-3 dates: 2 → 5 leg searches per hub
-        # (vs 13 before), keeping total wall-clock well under 55 s.
-        offsets = [(fwd, back) for fwd in range(1, 4) for back in range(1, 3)
-                   if dep + timedelta(days=fwd) < ret - timedelta(days=back)]
+        # Date strategy (matches real Wizz split patterns):
+        #   Leg 1: origin → via  on dep            (e.g. TLV→NAP Aug 4)
+        #   Leg 2: via → dest    on dep+1..dep+3   (e.g. NAP→CLJ Aug 5/6/7)
+        #   Leg 3: dest → via    on ret..ret+2     (e.g. CLJ→NAP Aug 11/12/13)
+        #   Leg 4: via → origin  on ret+1..ret+4   (e.g. NAP→TLV Aug 12/13/14/15)
+        # Previously Leg3 was searched at ret-1..ret-2 and Leg4 fixed at ret,
+        # which missed the correct pattern where the stopover is AFTER ret.
+        fwd_offsets  = list(range(1, 4))   # leg2: dep+1, dep+2, dep+3
+        leg3_offsets = list(range(0, 3))   # leg3: ret+0, ret+1, ret+2
+        leg4_offsets = list(range(1, 5))   # leg4: ret+1, ret+2, ret+3, ret+4
 
-        mid_combos: list[tuple[date, date]] = list({
-            (dep + timedelta(days=fwd), ret - timedelta(days=back))
-            for fwd, back in offsets
-        })
+        uniq_leg2_dates = [dep + timedelta(days=f) for f in fwd_offsets]
+        uniq_leg3_dates = [ret + timedelta(days=b) for b in leg3_offsets]
+        uniq_leg4_dates = [ret + timedelta(days=b) for b in leg4_offsets]
 
-        # Search every UNIQUE leg/date exactly once. Each mid date appears in
-        # many combos, so searching per-combo would fire ~5x redundant provider
-        # calls and throttle the upstreams (Wizz 429/503, empty results). Keyed
-        # by date, legs 2 & 3 collapse to a handful of real searches.
-        uniq_mid_dep = sorted({md for md, _ in mid_combos})
-        uniq_mid_ret = sorted({mr for _, mr in mid_combos})
+        leg1_task  = asyncio.create_task(_one_leg(origin, via, dep))
+        leg2_tasks = {d: asyncio.create_task(_one_leg(via, destination, d)) for d in uniq_leg2_dates}
+        leg3_tasks = {d: asyncio.create_task(_one_leg(destination, via, d)) for d in uniq_leg3_dates}
+        leg4_tasks = {d: asyncio.create_task(_one_leg(via, origin, d))       for d in uniq_leg4_dates}
 
-        leg1_task = asyncio.create_task(_one_leg(origin, via, dep))
-        leg4_task = asyncio.create_task(_one_leg(via, origin, ret))
-        leg2_tasks = {d: asyncio.create_task(_one_leg(via, destination, d)) for d in uniq_mid_dep}
-        leg3_tasks = {d: asyncio.create_task(_one_leg(destination, via, d)) for d in uniq_mid_ret}
-
-        leg1, leg4 = await asyncio.gather(leg1_task, leg4_task)
-        await asyncio.gather(*leg2_tasks.values(), *leg3_tasks.values())
+        leg1 = await leg1_task
+        await asyncio.gather(*leg2_tasks.values(), *leg3_tasks.values(), *leg4_tasks.values())
         leg2_map = {d: t.result() for d, t in leg2_tasks.items()}
         leg3_map = {d: t.result() for d, t in leg3_tasks.items()}
+        leg4_map = {d: t.result() for d, t in leg4_tasks.items()}
 
-        # A split is only real if EVERY leg has a direct flight. The fixed
-        # legs 1 & 4 must exist; otherwise there is no valid split to suggest.
-        if not leg1.options or not leg4.options:
+        if not leg1.options:
             return None
 
-        # Pick the cheapest combination that is also CHRONOLOGICALLY VALID:
-        # each leg must depart after the previous leg lands (+ connection buffer).
-        # Combos where the middle legs have no direct flight, or where no valid
-        # time-ordered chain exists, are skipped (never fabricate a $0 leg or an
-        # itinerary whose leg 2 departs before leg 1 has landed).
+        # Build all (leg2_date, leg3_date, leg4_date) combos where
+        # leg3 is after leg2 and leg4 is after leg3.
+        mid_combos = [
+            (d2, d3, d4)
+            for d2 in uniq_leg2_dates
+            for d3 in uniq_leg3_dates
+            for d4 in uniq_leg4_dates
+            if d2 < d3 < d4
+        ]
+
+        # Pick the cheapest chronologically-valid 4-leg combination.
         best: StopoverResponse | None = None
         best_total: float | None = None
-        for mid_dep, mid_ret in mid_combos:
-            leg2, leg3 = leg2_map[mid_dep], leg3_map[mid_ret]
-            if leg2.error or leg3.error or not leg2.options or not leg3.options:
+        for d2, d3, d4 in mid_combos:
+            leg2, leg3, leg4 = leg2_map[d2], leg3_map[d3], leg4_map[d4]
+            if any(l.error or not l.options for l in (leg2, leg3, leg4)):
                 continue
             legs = [leg1, leg2, leg3, leg4]
             plan = _chronological_plan(legs)
