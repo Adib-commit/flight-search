@@ -191,7 +191,16 @@ async def _check_watch(watch: dict) -> None:
         return
     except Exception as e:
         err_short = str(e)[:120]
-        logger.error("Watch %s check failed: %s", watch["id"], err_short, exc_info=True)
+        # A whole-tick provider exhaustion (every provider rate-limited this hour)
+        # is transient and self-recovers on the next tick — log it as a WARNING so
+        # it does NOT page the admin via the ERROR email handler. Reserve ERROR
+        # (which emails) for unexpected exceptions that signal a real bug.
+        transient = isinstance(e, RuntimeError) and "provider(s) failed" in str(e)
+        if transient:
+            logger.warning("Watch %s check failed (transient, will retry next tick): %s",
+                           watch["id"], err_short)
+        else:
+            logger.error("Watch %s check failed: %s", watch["id"], err_short, exc_info=True)
         watch["last_checked"] = now
         watch.setdefault("price_history", []).append({
             "checked_at": now, "price": None, "carriers": [],
