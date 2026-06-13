@@ -720,11 +720,15 @@ async function _fetchSplitSuggestion(searchPayload, via, cheapestRegular, regula
   const area = document.getElementById("split-suggestion-area");
   if (!area) return;
   try {
+    const splitAbort = new AbortController();
+    const splitTimer = setTimeout(() => splitAbort.abort(), 60000); // 60 s hard limit
     const resp = await fetch("/api/search/split-suggestion", {
       method: "POST",
       headers: authHeaders(),
       body: JSON.stringify({ search: searchPayload, via }),
+      signal: splitAbort.signal,
     });
+    clearTimeout(splitTimer);
     const split = resp.ok ? await resp.json() : null;
     // Honour the budget: a split that exceeds max price isn't a valid offer.
     if (split && split.legs && split.legs.length && maxPrice && split.total_price > maxPrice) {

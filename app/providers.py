@@ -120,6 +120,10 @@ class WizzProvider:
         self._client = WizzClient(settings)
         self._settings = settings
 
+    async def get_direct_destinations(self, iata: str) -> list[str]:
+        """Return all airports Wizz flies to directly from `iata`."""
+        return await self._client.get_direct_destinations(iata)
+
     async def search(self, **kw) -> list[Itinerary]:
         data = await self._client.search(
             origin=kw["origin"], destination=kw["destination"],

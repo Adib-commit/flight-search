@@ -297,8 +297,11 @@ _KNOWN_LCC_HUBS: list[str] = [
 ]
 
 # Maximum number of via-hub candidates to probe in parallel.  Each candidate
-# spawns 4 leg-searches × N providers, so keep this modest.
-_MAX_VIA_CANDIDATES = 6
+# spawns 5 leg-searches × N providers. With 3 candidates and 4 providers
+# (Kiwi+Kayak+Skyscanner+Wizz) that is 60 concurrent calls, finishing in ~45 s
+# well within the 55 s server timeout. Raising this beyond 3 risks browser
+# connection timeouts from the sheer volume of upstream HTTP calls.
+_MAX_VIA_CANDIDATES = 3
 
 
 def _find_via_airports(itineraries: list[Itinerary], n: int = 3) -> list[str]:
@@ -333,18 +336,60 @@ def _find_via_airport(itineraries: list[Itinerary]) -> str | None:
 
 
 async def run_split_suggestion(req: SearchRequest, via: str, settings: Settings) -> StopoverResponse | None:
-    """Try the caller-supplied hub PLUS all other known LCC hubs in parallel.
-    Returns the best-value (cheapest total price) split found across all candidates.
-    This ensures e.g. NAP is always evaluated even when only OTP appeared in the
-    regular search results."""
+    """Discover real viable hubs by intersecting direct routes from origin and to
+    destination (via the Wizz route map), then probe those hubs in parallel.
+
+    Strategy:
+      1. Ask Wizz: which airports does `origin` fly to directly?
+      2. Ask Wizz: which airports fly directly to `destination`?
+      3. Intersect → real split hubs that have both legs as direct Wizz flights.
+      4. Prepend the caller-supplied `via` (from the regular search result) so
+         it is always tried first.
+      5. Pad with _KNOWN_LCC_HUBS if the intersection is empty (Wizz map
+         unavailable / origin not on Wizz).
+      6. Cap at _MAX_VIA_CANDIDATES and run all in parallel.
+    """
     origin = req.origin.strip().upper()
     destination = req.destination.strip().upper()
-    # Build candidate list: supplied via first, then remaining known hubs.
-    # Drop origin / destination themselves — they can't be intermediate hubs.
-    candidates: list[str] = [via]
-    for hub in _KNOWN_LCC_HUBS:
-        if hub not in candidates and hub not in (origin, destination):
-            candidates.append(hub)
+
+    # Step 1 & 2: discover real direct connections from Wizz route map
+    wizz = WizzProvider(settings)
+    try:
+        from_origin, to_dest = await asyncio.gather(
+            wizz.get_direct_destinations(origin),
+            wizz.get_direct_destinations(destination),
+            return_exceptions=True,
+        )
+        if isinstance(from_origin, Exception):
+            from_origin = []
+        if isinstance(to_dest, Exception):
+            to_dest = []
+    except Exception:
+        from_origin, to_dest = [], []
+
+    # Step 3: intersection = airports reachable from origin AND that reach dest
+    real_hubs = [a for a in from_origin if a in set(to_dest)
+                 and a not in (origin, destination)]
+    logger.info(
+        "SPLIT route-map: from %s → %d airports; to %s ← %d airports; "
+        "intersection=%s",
+        origin, len(from_origin), destination, len(to_dest),
+        real_hubs or "(none — falling back to known hubs)",
+    )
+
+    # Step 4-6: build final candidate list
+    candidates: list[str] = []
+    # Always try the caller-supplied via first (comes from regular search result)
+    if via and via not in (origin, destination):
+        candidates.append(via)
+    # Prepend discovered hubs (most relevant first)
+    for h in real_hubs:
+        if h not in candidates:
+            candidates.append(h)
+    # Pad with known hubs as fallback
+    for h in _KNOWN_LCC_HUBS:
+        if h not in candidates and h not in (origin, destination):
+            candidates.append(h)
     candidates = candidates[:_MAX_VIA_CANDIDATES]
 
     logger.info("SPLIT trying %d hub candidates: %s", len(candidates), ", ".join(candidates))
@@ -403,8 +448,8 @@ async def _split_for_one_via(
 
     # KiwiRapid + Kayak give regional direct coverage (e.g. Kayak has direct
     # OTP→CLJ that Kiwi lacks) plus Wizz direct LCC fares (TLV↔OTP). Skyscanner
-    # is added too so split-leg fares reconcile with what the user sees on
-    # Skyscanner — it's slower (cold call), so the per-leg timeout is widened.
+    # is included for fare reconciliation — its per-leg timeout is capped at 30 s
+    # (down from 45 s) so it doesn't block the overall split budget.
     leg_providers = [KiwiRapidProvider(settings), KayakProvider(settings), SkyscannerProvider(settings)]
     if settings.wizz_enabled:
         leg_providers.append(WizzProvider(settings))
@@ -424,7 +469,7 @@ async def _split_for_one_via(
                     included_airlines=None, excluded_airlines=None,
                     currency=settings.currency,
                 ),
-                timeout=45,   # widened to let the slow Skyscanner cold-call return
+                timeout=30,   # 30 s per leg keeps 3-hub×5-leg total under 55 s
             )
             # Enforce direct: providers don't all honor non_stop, so drop any leg
             # itinerary that has its own stops. A split = 4 direct hops via OTP.
@@ -459,9 +504,12 @@ async def _split_for_one_via(
             return StopoverLegResult(label=label, date=d.isoformat(), options=[], cheapest_price=0.0, currency=settings.currency, error=str(exc)[:80])
 
     if ret:
-        # Try all combinations: fwd_offset 1-6 days, back_offset 1-5 days
-        # Deduplicated so the same date pair is only searched once
-        offsets = [(fwd, back) for fwd in range(1, 7) for back in range(1, 6)
+        # Try a focused set of offsets: fwd 1-3 days after dep, back 1-2 days
+        # before ret. This covers the common "fly in a day early, leave a day
+        # late" patterns without exploding to 30 combos × 6 hubs × 4 providers.
+        # Unique leg-2 dates: 3; unique leg-3 dates: 2 → 5 leg searches per hub
+        # (vs 13 before), keeping total wall-clock well under 55 s.
+        offsets = [(fwd, back) for fwd in range(1, 4) for back in range(1, 3)
                    if dep + timedelta(days=fwd) < ret - timedelta(days=back)]
 
         mid_combos: list[tuple[date, date]] = list({

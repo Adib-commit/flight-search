@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -306,11 +307,17 @@ class SplitSuggestionRequest(BaseModel):
 
 @app.post("/api/search/split-suggestion", response_model=StopoverResponse | None)
 async def search_split_suggestion(req: SplitSuggestionRequest):
-    """Agent-built multi-day split suggestion: called async by frontend after main search."""
+    """Agent-built multi-day split suggestion: called async by frontend after main search.
+    Hard-capped at 55 s so the browser connection never times out."""
     settings = get_settings()
     try:
-        result = await run_split_suggestion(req.search, req.via, settings)
+        result = await asyncio.wait_for(
+            run_split_suggestion(req.search, req.via, settings),
+            timeout=55,
+        )
         return result
+    except asyncio.TimeoutError:
+        return None
     except Exception:
         return None
 

@@ -83,6 +83,35 @@ class WizzClient:
         }
         return await client.post(url, json=body, headers=self._headers())
 
+    async def get_direct_destinations(self, origin: str) -> list[str]:
+        """Return IATA codes of all airports Wizz flies to directly from `origin`.
+
+        Uses the public route-map endpoint (no auth needed). Falls back to []
+        on any error so callers can degrade gracefully.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                version = await self._get_version(client)
+                url = f"{self.BASE}/{version}/Api/asset/map"
+                resp = await client.get(
+                    url,
+                    params={"languageCode": "en-gb"},
+                    headers=self._headers(),
+                )
+                if resp.status_code != 200:
+                    return []
+                data = resp.json()
+                for city in data.get("cities", []):
+                    if city.get("iata", "").upper() == origin.upper():
+                        return [
+                            c["iata"].upper()
+                            for c in city.get("connections", [])
+                            if c.get("iata")
+                        ]
+        except Exception as exc:
+            logger.debug("WIZZ route-map failed for %s: %s", origin, exc)
+        return []
+
     async def search(
         self,
         *,
