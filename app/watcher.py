@@ -247,6 +247,8 @@ async def _check_watch(watch: dict) -> None:
                 watch["id"], new_price, split_price, old_best, old_split)
 
     notes: list[str] = []
+    regular_dropped = False
+    split_dropped    = False
 
     # ── regular round-trip drop tracking ────────────────────────────────────
     if new_price is not None:
@@ -255,10 +257,10 @@ async def _check_watch(watch: dict) -> None:
             notes.append("regular first-check baseline")
         elif new_price < old_best:
             watch["best_price"] = new_price
+            regular_dropped = True
             notes.append(f"regular DROP from {old_best:.2f}")
             logger.info("Watch %s: regular DROP %.2f → %.2f, emailing %s",
                         watch["id"], old_best, new_price, watch["email"])
-            _send_drop(settings, watch, new_price, old_best, booking_url, carriers)
         elif new_price > old_best:
             notes.append(f"regular rose from best {old_best:.2f}")
         else:
@@ -271,14 +273,21 @@ async def _check_watch(watch: dict) -> None:
             notes.append(f"split baseline {split_price:.2f}")
         elif split_price < old_split:
             watch["best_split_price"] = split_price
+            split_dropped = True
             notes.append(f"split DROP from {old_split:.2f}")
             logger.info("Watch %s: SPLIT DROP %.2f → %.2f via %s, emailing %s",
                         watch["id"], old_split, split_price, split_via_used, watch["email"])
-            _send_drop(settings, watch, split_price, old_split, split_booking_url, split_carriers)
         elif split_price > old_split:
             notes.append(f"split rose from best {old_split:.2f}")
         else:
             notes.append("split unchanged")
+
+    # ── send ONE combined email when either price dropped ────────────────────
+    if regular_dropped or split_dropped:
+        _send_combined(settings, watch,
+                       new_price, old_best, booking_url, carriers,
+                       split_price, old_split, split_booking_url,
+                       split_carriers, split_via_used)
 
     if new_price is None and split_price is None:
         logger.warning("WATCH %s no price this check", watch["id"])
@@ -287,8 +296,36 @@ async def _check_watch(watch: dict) -> None:
     _save()
 
 
+def _send_combined(settings, watch,
+                   regular_price, regular_old, regular_url, regular_carriers,
+                   split_price, split_old, split_url, split_carriers, split_via) -> None:
+    """Send ONE combined email showing both the regular and split prices."""
+    try:
+        send_combined_price_alert(
+            settings,
+            to_email=watch["email"],
+            origin=watch["origin"],
+            destination=watch["destination"],
+            departure=watch["departure"],
+            ret=watch.get("ret"),
+            currency=watch["currency"],
+            regular_price=regular_price,
+            regular_old_price=regular_old,
+            regular_url=regular_url,
+            regular_carriers=regular_carriers,
+            split_price=split_price,
+            split_old_price=split_old,
+            split_url=split_url,
+            split_carriers=split_carriers,
+            split_via=split_via,
+        )
+    except Exception as e:
+        logger.error("Watch %s: combined email to %s failed: %s",
+                     watch["id"], watch["email"], e, exc_info=True)
+
+
 def _send_drop(settings, watch, new_price, old_price, booking_url, carriers) -> None:
-    """Send a price-drop email, swallowing/logging any SMTP failure."""
+    """Legacy single-option drop email (kept for confirmation emails)."""
     try:
         send_price_alert(
             settings,

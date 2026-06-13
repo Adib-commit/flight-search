@@ -181,6 +181,117 @@ def send_watch_confirmation(
             server.login(settings.smtp_user, settings.smtp_password)
         server.sendmail(settings.smtp_from, [to_email], msg.as_string())
 
+def send_combined_price_alert(
+    settings: Settings,
+    *,
+    to_email: str,
+    origin: str,
+    destination: str,
+    departure: str,
+    ret: str | None,
+    currency: str,
+    # regular round-trip
+    regular_price: float | None,
+    regular_old_price: float | None,
+    regular_url: str,
+    regular_carriers: list[str],
+    # multi-day split
+    split_price: float | None,
+    split_old_price: float | None,
+    split_url: str,
+    split_carriers: list[str],
+    split_via: str | None,
+) -> None:
+    """Send ONE combined email showing both the regular fare and the split option.
+    Triggered when either price drops. Silently skips if SMTP_HOST not configured."""
+    if not settings.smtp_host:
+        return
+
+    dates = f"{departure}" + (f" – {ret}" if ret else " (one-way)")
+
+    # Determine subject based on what dropped
+    if regular_price and regular_old_price and regular_price < regular_old_price:
+        subject = (f"✈ Price drop! {origin}→{destination} now {currency} "
+                   f"{regular_price:.2f} (was {regular_old_price:.2f})")
+    elif split_price and split_old_price and split_price < split_old_price:
+        subject = (f"✈ Split-ticket drop! {origin}→{destination} via {split_via or 'hub'} "
+                   f"now {currency} {split_price:.2f} (was {split_old_price:.2f})")
+    else:
+        subject = f"✈ Price update: {origin}→{destination} ({departure})"
+
+    def _price_row(label, price, old_price, carriers, url, color="#16a34a"):
+        if price is None:
+            return f"<tr><td colspan='2' style='padding:6px 12px;color:#94a3b8'>{label}: not available</td></tr>"
+        drop_badge = ""
+        if old_price and price < old_price:
+            drop_badge = f' &nbsp;<span style="background:#dcfce7;color:#16a34a;padding:2px 8px;border-radius:4px;font-size:.85em">▼ DROP from {currency} {old_price:.2f}</span>'
+        book_btn = (f' &nbsp;<a href="{url}" style="background:#0ea5e9;color:#fff;padding:3px 10px;'
+                    f'border-radius:4px;text-decoration:none;font-size:.85em">Book →</a>' if url else "")
+        return f"""
+    <tr style="border-bottom:1px solid #e2e8f0">
+      <td style="padding:8px 12px;background:#f8fafc;font-weight:600">{label}</td>
+      <td style="padding:8px 12px">
+        <span style="color:{color};font-weight:700;font-size:1.1em">{currency} {price:.2f}/pp</span>
+        {drop_badge}{book_btn}<br/>
+        <span style="color:#64748b;font-size:.82em">{', '.join(carriers) if carriers else '—'}</span>
+      </td>
+    </tr>"""
+
+    regular_row = _price_row(
+        "🔵 Regular round-trip", regular_price, regular_old_price,
+        regular_carriers, regular_url,
+    )
+    split_label = f"💡 Split via {split_via}" if split_via else "💡 Multi-day split"
+    split_row = _price_row(
+        split_label, split_price, split_old_price,
+        split_carriers, split_url, color="#0e7490",
+    )
+
+    html = f"""
+<html><body style="font-family:sans-serif;color:#1e293b;max-width:600px;margin:0 auto">
+  <h2>✈ Flight Price Alert</h2>
+  <p><b>Route:</b> {origin} → {destination} &nbsp;|&nbsp; <b>Dates:</b> {dates}</p>
+  <table style="border-collapse:collapse;width:100%;border:1px solid #e2e8f0;border-radius:8px">
+    {regular_row}
+    {split_row}
+  </table>
+  <p style="color:#64748b;font-size:.82em;margin-top:1rem">
+    Prices shown are per-person. Split-ticket requires booking each leg separately.<br/>
+    Automated alert from the Flight Optimization price watcher.
+  </p>
+</body></html>"""
+
+    plain_parts = [f"Flight Price Alert: {origin}→{destination} ({dates})\n"]
+    if regular_price:
+        plain_parts.append(
+            f"Regular round-trip: {currency} {regular_price:.2f}/pp"
+            + (f" (was {regular_old_price:.2f})" if regular_old_price and regular_price < regular_old_price else "")
+            + (f" — {', '.join(regular_carriers)}" if regular_carriers else "")
+            + (f"\nBook: {regular_url}" if regular_url else "")
+        )
+    if split_price:
+        plain_parts.append(
+            f"Split via {split_via or 'hub'}: {currency} {split_price:.2f}/pp"
+            + (f" (was {split_old_price:.2f})" if split_old_price and split_price < split_old_price else "")
+            + (f" — {', '.join(split_carriers)}" if split_carriers else "")
+            + (f"\nBook leg 1: {split_url}" if split_url else "")
+        )
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = settings.smtp_from
+    msg["To"] = to_email
+    msg.attach(MIMEText("\n\n".join(plain_parts), "plain"))
+    msg.attach(MIMEText(html, "html"))
+
+    with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+        if settings.smtp_tls:
+            server.starttls()
+        if settings.smtp_user and settings.smtp_password:
+            server.login(settings.smtp_user, settings.smtp_password)
+        server.sendmail(settings.smtp_from, [to_email], msg.as_string())
+
+
 def send_admin_error_alert(
     settings: Settings,
     *,
