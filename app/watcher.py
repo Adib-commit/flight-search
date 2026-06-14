@@ -402,12 +402,12 @@ def start_scheduler() -> None:
     setup_logging(get_settings().log_level)
     _load()
     logger.info("Price watcher: loaded %d watch(es) from %s", len(_watches), _STORE_PATH)
-    scheduler.add_job(_run_all_watches, "interval", minutes=30, id="price_watcher",
+    scheduler.add_job(_run_all_watches, "interval", minutes=120, id="price_watcher",
                       next_run_time=datetime.now() + timedelta(seconds=60))
     scheduler.add_job(_healthcheck, "interval", minutes=10, id="healthcheck",
                       next_run_time=datetime.now())
     scheduler.start()
-    logger.info("Price watcher scheduler started (watch=30min, healthcheck=10min).")
+    logger.info("Price watcher scheduler started (watch=120min, healthcheck=10min).")
 
 
 def stop_scheduler() -> None:
