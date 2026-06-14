@@ -851,7 +851,16 @@ async function loadWatches() {
 function renderWatches(watches) {
   const el = document.getElementById("watches-list");
   if (!watches.length) { el.innerHTML = ""; return; }
-  const rows = watches.map((w) => `
+  const intervalOpts = [
+    [60, "Every 1h"], [120, "Every 2h"], [240, "Every 4h"],
+    [360, "Every 6h"], [720, "Every 12h"], [1440, "Every 24h"],
+  ];
+  const rows = watches.map((w) => {
+    const cur = w.interval_minutes || 120;
+    const opts = intervalOpts
+      .map(([m, label]) => `<option value="${m}"${m === cur ? " selected" : ""}>${label}</option>`)
+      .join("");
+    return `
     <div class="watch-card">
       <div class="watch-meta">
         <span class="watch-route">${w.origin} → ${w.destination}</span>
@@ -859,14 +868,27 @@ function renderWatches(watches) {
         <span class="watch-email">📧 ${w.email}</span>
         ${w.best_price != null ? `<span class="watch-price">Best seen: <b>${w.best_price.toFixed(2)} ${w.currency}</b></span>` : ""}
         ${w.last_checked ? `<span class="watch-checked">Last checked: ${w.last_checked.slice(0,16).replace("T"," ")}</span>` : ""}
+        <label class="watch-interval">⏱ Check: <select class="interval-select" data-id="${w.id}">${opts}</select></label>
       </div>
       <button class="btn-remove" data-id="${w.id}">✕ Remove</button>
-    </div>`).join("");
+    </div>`;
+  }).join("");
   el.innerHTML = `<h3>Active watches (${watches.length})</h3>${rows}`;
   el.querySelectorAll(".btn-remove").forEach((btn) => {
     btn.addEventListener("click", async () => {
       await fetch(`/api/watches/${btn.dataset.id}`, { method: "DELETE", headers: authHeaders() });
       loadWatches();
+    });
+  });
+  el.querySelectorAll(".interval-select").forEach((sel) => {
+    const prev = sel.value;
+    sel.addEventListener("change", async () => {
+      const resp = await fetch(`/api/watches/${sel.dataset.id}/interval`, {
+        method: "PATCH",
+        headers: authHeaders(),
+        body: JSON.stringify({ interval_minutes: Number(sel.value) }),
+      });
+      if (!resp.ok) { sel.value = prev; alert("Could not update interval."); }
     });
   });
 }

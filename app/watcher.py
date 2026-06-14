@@ -24,6 +24,13 @@ _STORE_PATH = _DATA_DIR / "watches.json"
 _watches: dict[str, dict[str, Any]] = {}
 scheduler = AsyncIOScheduler()
 
+# User-tunable per-watch check cadence. The dispatcher wakes every
+# _DISPATCH_EVERY_MIN and runs only the watches that are due by their own
+# interval, so each user picks how often their watch is checked.
+_DEFAULT_INTERVAL_MIN = 120
+_ALLOWED_INTERVALS = (60, 120, 240, 360, 720, 1440)  # 1h, 2h, 4h, 6h, 12h, 24h
+_DISPATCH_EVERY_MIN = 30
+
 # Only one split search runs at a time across all watches.
 # Without this, 4 concurrent watches each fire 90 provider calls = 360 total,
 # hitting Kiwi/Kayak rate limits and returning 0 for every split leg.
@@ -90,6 +97,7 @@ def add_watch(
         "airline_filters": airline_filters,
         "max_price": max_price,
         "currency": currency,
+        "interval_minutes": _DEFAULT_INTERVAL_MIN,  # user-tunable check cadence
         "best_price": current_best,   # all-time lowest ever seen
         "last_price": current_best,   # most recently observed price
         "created_at": now,
@@ -145,6 +153,21 @@ def clear_all_history(user_id: str | None = None) -> int:
     if n:
         _save()
     return n
+
+
+def update_watch_interval(watch_id: str, interval_minutes: int, user_id: str | None = None) -> bool:
+    """Set a watch's check cadence. Owner-or-admin (user_id=None bypasses the
+    owner check for admins). Rejects values outside _ALLOWED_INTERVALS."""
+    if interval_minutes not in _ALLOWED_INTERVALS:
+        return False
+    w = _watches.get(watch_id)
+    if not w:
+        return False
+    if user_id is not None and w.get("user_id") != user_id:
+        return False
+    w["interval_minutes"] = interval_minutes
+    _save()
+    return True
 
 
 def list_watches(user_id: str | None = None) -> list[dict]:
@@ -360,11 +383,33 @@ async def _healthcheck() -> None:
     logger.info("HEALTHCHECK ok: app running, scheduler alive, %d active watch(es)", active)
 
 
+def _is_due(w: dict, now: datetime) -> bool:
+    """A watch is due when it has never been checked, or its own interval has
+    elapsed since the last check. Per-watch interval defaults to 2h."""
+    if not w.get("active"):
+        return False
+    last = w.get("last_checked")
+    if not last:
+        return True
+    interval = w.get("interval_minutes", _DEFAULT_INTERVAL_MIN)
+    try:
+        elapsed = (now - datetime.fromisoformat(last)).total_seconds() / 60.0
+    except (ValueError, TypeError):
+        return True  # unparseable timestamp → check it now rather than stall forever
+    # Small slack so a watch due at ~120min isn't skipped to ~150min by the
+    # 30min dispatch grid (e.g. last check landed 119min ago on a tick boundary).
+    return elapsed >= interval - (_DISPATCH_EVERY_MIN / 2.0)
+
+
 async def _run_all_watches() -> None:
+    """Dispatcher: runs only the watches that are due by their own interval."""
     t0 = datetime.now()
-    active = [w for w in _watches.values() if w.get("active")]
-    logger.info("WATCHER tick: checking %d active watch(es)", len(active))
-    await asyncio.gather(*[_check_watch(w) for w in active])
+    due = [w for w in _watches.values() if _is_due(w, t0)]
+    active = sum(1 for w in _watches.values() if w.get("active"))
+    logger.info("WATCHER tick: %d/%d active watch(es) due", len(due), active)
+    if not due:
+        return
+    await asyncio.gather(*[_check_watch(w) for w in due])
     logger.info("WATCHER tick done in %.2fs", (datetime.now() - t0).total_seconds())
 
 
@@ -402,12 +447,13 @@ def start_scheduler() -> None:
     setup_logging(get_settings().log_level)
     _load()
     logger.info("Price watcher: loaded %d watch(es) from %s", len(_watches), _STORE_PATH)
-    scheduler.add_job(_run_all_watches, "interval", minutes=120, id="price_watcher",
+    scheduler.add_job(_run_all_watches, "interval", minutes=_DISPATCH_EVERY_MIN, id="price_watcher",
                       next_run_time=datetime.now() + timedelta(seconds=60))
     scheduler.add_job(_healthcheck, "interval", minutes=10, id="healthcheck",
                       next_run_time=datetime.now())
     scheduler.start()
-    logger.info("Price watcher scheduler started (watch=120min, healthcheck=10min).")
+    logger.info("Price watcher scheduler started (dispatch=%dmin, default interval=%dmin, healthcheck=10min).",
+                _DISPATCH_EVERY_MIN, _DEFAULT_INTERVAL_MIN)
 
 
 def stop_scheduler() -> None:

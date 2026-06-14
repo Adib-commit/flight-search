@@ -453,6 +453,26 @@ async def delete_watch(
     return {}
 
 
+class WatchIntervalRequest(BaseModel):
+    interval_minutes: int
+
+
+@app.patch("/api/watches/{watch_id}/interval")
+async def set_watch_interval(
+    watch_id: str,
+    req: WatchIntervalRequest,
+    user: dict = Depends(_get_current_user),
+) -> dict:
+    """Set a watch's check cadence (admin, or the watch's owner)."""
+    uid = None if user.get("role") == "admin" else user["id"]
+    if not watcher.update_watch_interval(watch_id, req.interval_minutes, user_id=uid):
+        raise HTTPException(
+            status_code=400,
+            detail="Watch not found, not yours, or unsupported interval.",
+        )
+    return {"id": watch_id, "interval_minutes": req.interval_minutes}
+
+
 @app.delete("/api/watches/{watch_id}/history")
 async def clear_watch_history(
     watch_id: str,
