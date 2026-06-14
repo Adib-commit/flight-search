@@ -461,11 +461,18 @@ async def _split_for_one_via(
     dep: date = req.flight_dates.departure
     ret: date | None = req.flight_dates.ret
 
-    # For split legs we use Kiwi+Kayak+Skyscanner only.
-    # Wizz timetable API returns 503 for direct server-to-server calls
-    # (Akamai bot-protection). Kiwi and Kayak both index Wizz flights,
-    # so Wizz fares are still covered without the 503 failures.
+    # Split legs query Kiwi + Kayak + Skyscanner + Wizz direct.
+    # Wizz was previously excluded: its timetable API 503s under the 11-leg
+    # concurrent burst (Akamai bot-protection), and back then a 503 nulled the
+    # whole leg. Kiwi/Kayak only *index* Wizz flights — at resale markup — so
+    # dropping Wizz inflated the split price above the real wizzair.com fare.
+    # Now provider_timeout (below) + MultiProvider's partial-merge mean a
+    # throttled/slow Wizz just drops out of the leg instead of nulling it, so we
+    # get the raw cheap Wizz fare when it answers and lose nothing when it doesn't.
+    # WizzProvider's own 2-slot semaphore + 429/503 backoff caps the burst.
     leg_providers = [KiwiRapidProvider(settings), KayakProvider(settings), SkyscannerProvider(settings)]
+    if settings.wizz_enabled:
+        leg_providers.append(WizzProvider(settings))
     # provider_timeout=8: Kiwi+Skyscanner (~1.5s, no global lock) carry the leg;
     # Kayak (serialized behind its process-global _KAYAK_LOCK) contributes when its
     # queue is short and silently drops out at 8s when not — it can no longer null
