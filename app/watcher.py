@@ -13,7 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from .config import get_settings
 from .models import AirlineFilters, FlightDates, SearchRequest
-from .notifier import send_price_alert
+from .notifier import send_combined_price_alert, send_price_alert
 from .search import NoResultsError, run_search, run_split_suggestion
 
 logger = logging.getLogger(__name__)
